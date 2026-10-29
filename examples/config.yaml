@@ -1,0 +1,42 @@
+version: 1
+
+settings:
+  maxConcurrentPerProject: 2
+  launch:
+    claude: claude --dangerously-skip-permissions
+    codex: codex --dangerously-bypass-approvals-and-sandbox
+  notify:
+    desktop: true
+    waitingMinutes: 10
+    maxRunMinutes: 120
+    queuedMinutes: 30
+
+kinds:
+  - id: feature
+    name: Feature development
+  - id: bugfix
+    name: Bug fix
+  - id: dependabot
+    name: Dependabot updates
+  - id: review
+    name: Review
+
+projects:
+  - name: your-project
+    path: /Users/you/git/your-repo
+    repo: your-org/your-repo
+    githubAccount: your-github-login
+    enabled: true
+    rules:
+      - target: issue
+        label: impl
+        kind: feature
+        ai: claude
+        batch: each
+        delayMinutes: 5
+      - target: pr
+        label: dependencies
+        kind: dependabot
+        ai: claude
+        batch: together
+        delayMinutes: 30

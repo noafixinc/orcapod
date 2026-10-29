@@ -1,0 +1,1 @@
+export const JAPANESE = /[\u3000-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef\u{1aff0}-\u{1b16f}\u{1f200}-\u{1f2ff}\u{20000}-\u{3ffff}]/u

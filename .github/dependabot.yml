@@ -1,0 +1,38 @@
+# Keep version updates disabled; only group low-risk security patches.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      lint-format-security-patch:
+        applies-to: security-updates
+        dependency-type: development
+        patterns:
+          - "@biomejs/biome"
+          - "@eslint/*"
+          - "@typescript-eslint/*"
+          - "eslint"
+          - "eslint-*"
+          - "typescript-eslint"
+          - "prettier"
+          - "prettier-plugin-*"
+          - "globals"
+        update-types: [patch]
+      test-tools-security-patch:
+        applies-to: security-updates
+        dependency-type: development
+        patterns:
+          - "@jest/*"
+          - "@vitest/*"
+          - "jest"
+          - "jest-*"
+          - "ts-jest"
+          - "vitest"
+          - "@vue/test-utils"
+          - "@solidjs/testing-library"
+          - "happy-dom"
+          - "jsdom"
+        update-types: [patch]
