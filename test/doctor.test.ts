@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -333,4 +333,64 @@ describe('runDoctor', () => {
     expect(calls).toEqual([])
     expect(formatDoctorLine(lines[lines.length - 1])).toBe('NG   probe: cannot try because the config is unreadable')
   })
+
+  it('every NG line doctor can print matches a row of the docs/setup.md table, and every row matches some NG line', async () => {
+    const unreadable = { ok: false, error: 'exit 1' } as const
+    const judgedNg = [
+      facts({
+        orca: unreadable,
+        hooks: unreadable,
+        ghAccounts: unreadable,
+        registeredPaths: unreadable,
+        isPrivate: { todos: unreadable },
+        commands: [{ ai: 'claude', command: 'claude', found: null }, { ai: 'codex', command: 'codex', found: null }],
+        pathErrors: [`projects[0].path: "${STOCK_PATH}" does not exist`],
+        claudeConfig: null,
+      }),
+      facts({
+        orca: { ok: true, value: { running: false, version: null } },
+        hooks: { ok: true, value: { enabled: false, agents: { claude: 'installed', codex: 'installed' } } },
+        ghAccounts: { ok: true, value: [] },
+        config: { ok: false, errors: ['version: required'], unknownGithubAccounts: [] },
+      }),
+      facts({
+        hooks: { ok: true, value: { enabled: true, agents: { claude: 'not_installed', codex: 'partial' } } },
+        registeredPaths: { ok: true, value: [] },
+        config: configWith([project({ rules: [claudeRule, codexRule] })]),
+      }),
+    ].flatMap(judgeDoctor)
+
+    const created = async () => ({ ref: { handle: 'term_p', tabId: 'tab-p', paneKey: 'tab-p:leaf-p', ptyId: 'pty-p' }, warning: null })
+    const probeOrcas = [
+      orcaWith([], { createTerminal: async () => { throw new OrcaError('no_pane_key', 'terminal create response has no paneKey') } }),
+      orcaWith([], { createTerminal: created, waitExit: async () => ({ exited: false }), closeTerminal: async () => { throw new OrcaError('terminal_handle_stale', 'handle is stale') } }),
+      orcaWith([], { createTerminal: created, waitExit: async () => { throw new OrcaError('terminal_not_found', 'no such terminal') }, closeTerminal: async () => ({ ptyKilled: true }) }),
+    ]
+    const probedNg = []
+    for (const orca of probeOrcas) probedNg.push(...(await runDoctor(depsWith(orca), { probe: true })))
+    writeFileSync(join(home, 'config.yaml'), stringify({ version: 1, kinds: [{ id: 'feature', name: 'Feature' }], projects: [] }))
+    probedNg.push(...(await runDoctor(depsWith(orcaWith([], {})), { probe: true })))
+    writeFileSync(join(home, 'config.yaml'), 'version: [')
+    probedNg.push(...(await runDoctor(depsWith(orcaWith([], {})), { probe: true })))
+
+    const ngTexts = [...judgedNg, ...probedNg].filter((line) => line.level === 'NG').map((line) => line.text)
+    const markers = setupTableMarkers()
+    expect(ngTexts.filter((text) => !markers.some((marker) => marker.pattern.test(text)))).toEqual([])
+    expect(markers.filter((marker) => !ngTexts.some((text) => marker.pattern.test(text))).map((marker) => marker.source)).toEqual([])
+  })
 })
+
+function setupTableMarkers(): { source: string; pattern: RegExp }[] {
+  const text = readFileSync(new URL('../docs/setup.md', import.meta.url), 'utf8')
+  const start = text.indexOf('\n## 5. Diagnose the environment\n')
+  expect(start).toBeGreaterThanOrEqual(0)
+  const section = text.slice(start, text.indexOf('\n## ', start + 1))
+  const lines = section.split('\n')
+  const bodyRows = lines.slice(lines.findIndex((line) => line.startsWith('| :---')) + 1)
+  const firstCells = bodyRows.filter((line) => line.startsWith('| `')).map((line) => line.split(' | ')[0])
+  expect(firstCells.length).toBeGreaterThan(0)
+  return firstCells.flatMap((cell) => [...cell.matchAll(/`([^`]+)`/g)].map(([, source]) => ({
+    source,
+    pattern: new RegExp(source.split(/…|<[^>]+>/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.+')),
+  })))
+}

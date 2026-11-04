@@ -95,6 +95,12 @@ It exits with status 1 when any line is `NG`. `WARN daemon: not running` is expe
 | `is not registered in Orca` | Person | Add the folder in Orca |
 | `folder trust is not accepted in <ai>` | Person | Open that AI CLI interactively once in the project path and accept the trust dialog |
 | `config: …` | Agent | Fix `config.yaml` and run `validate` again |
+| `gh: cannot read accounts` / `hooks: cannot read the state` / `Orca registration: cannot read the list` / `<project>: cannot read <repo>` | Agent, then person | The command failed; the reason is in parentheses. Run the same `gh` / `orca` command yourself to see the full error. Hand it to the person when it needs a login, a GUI or repository access |
+| `probe: cannot try` | Agent | Make `config.yaml` readable and enable at least one project |
+| `probe create: cannot open a tab` | Agent, then person | Resolve the other `NG` lines first; if it still fails, give the person the error in parentheses |
+| `probe wait:` / `probe close:` | Person | Look at the tab Orca opened in the first enabled project: it is usually stopped at a dialog. Close it by hand if it is still open |
+
+The `probe …` lines appear only with `--probe` (step 6). `test/doctor.test.ts` checks that every `NG` line `doctor` can print matches a row of this table, so change both together.
 
 A `WARN` about hooks trust (`hasTrustDialogHooksAccepted`) means the launch may stop at a second dialog: ask the person to open Claude Code in that path once and accept it. A `WARN` that the repository is public is a reminder of decision 3.
 
