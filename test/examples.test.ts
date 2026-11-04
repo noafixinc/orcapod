@@ -50,7 +50,7 @@ function listFiles(dir: string): string[] {
     .map((entry) => join(entry.parentPath, entry.name))
 }
 
-// Each README line runs independently, including after cp -n declines a copy.
+// Each docs/setup.md line runs independently, including after cp -n declines a copy.
 function runCopyCommands(cwd: string) {
   return COPY_COMMANDS.map((line) => {
     const { status, signal, error, stdout, stderr } = spawnSync('/bin/sh', ['-c', line], { cwd, encoding: 'utf8' })
@@ -160,15 +160,14 @@ describe('E3: the shipped examples are not ignored', () => {
   })
 })
 
-describe('E4: a home made with the README copy commands also passes the checks, and re-running does not overwrite', () => {
+describe('E4: a home made with the docs/setup.md copy commands also passes the checks, and re-running does not overwrite', () => {
   it.each([
-    ['README.md', '## Install'],
-    ['README.ja.md', '## \u5c0e\u5165'],
+    ['docs/setup.md', '## 4. Write the configuration'],
   ])('X6: in %s, the code block of the "%s" section contains COPY_COMMANDS as 3 consecutive lines', (file, heading) => {
-    const readme = readFileSync(join(REPOSITORY_ROOT, file), 'utf8')
-    const start = readme.indexOf(`\n${heading}\n`)
+    const document = readFileSync(join(REPOSITORY_ROOT, file), 'utf8')
+    const start = document.indexOf(`\n${heading}\n`)
     expect(start).toBeGreaterThanOrEqual(0)
-    const rest = readme.slice(start + 1)
+    const rest = document.slice(start + 1)
     const next = rest.indexOf('\n## ', 1)
     const section = next === -1 ? rest : rest.slice(0, next)
     const blocks = [...section.matchAll(/```[^\n]*\n([\s\S]*?)\n```/g)].map((m) => m[1])

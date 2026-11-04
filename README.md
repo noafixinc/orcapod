@@ -56,26 +56,15 @@ orcapod is not published to npm; it runs from a clone of this repository.
 ```sh
 git clone https://github.com/noafixinc/orcapod.git
 cd orcapod
-pnpm install --frozen-lockfile
 ```
 
-Create your configuration from the examples. `cp -n` never overwrites an existing file and exits with status 1 when it skips one, so run each line on its own:
+Then let an AI agent do the setup. Open Claude Code or Codex CLI in the clone and ask:
 
-```sh
-cp -n examples/config.yaml config.yaml
-mkdir -p prompts
-cp -n examples/prompts/*.md prompts/
-```
+> Set up orcapod following docs/setup.md.
 
-Edit `config.yaml`: set the project `name`, `path`, `repo`, `githubAccount` and the rules you want, and make sure a prompt template `prompts/<kind>.<ai>.md` exists for every `kind` / `ai` pair your rules use. Then check the setup and start the daemon:
+[docs/setup.md](docs/setup.md) is the procedure the agent follows. It checks the requirements, asks you which repositories, labels, authors and prompts to use, asks you to accept the unattended-permission trade-off in the [Security note](#security-note), writes `config.yaml` and `prompts/`, and runs `validate` and `doctor` until they pass. It hands you the steps only you can do: opening Orca and adding folders to it, `gh auth login`, accepting each AI CLI's trust dialog, and finally `make start` in your terminal.
 
-```sh
-make validate   # parse config.yaml and the prompt templates
-make doctor     # Orca running, hooks enabled, gh accounts, trust dialogs (node bin/orcapod.js doctor --probe also opens and closes a test tab)
-make start      # start the daemon in the background and open the monitor (q closes the monitor only)
-```
-
-`validate` and `doctor` fail until `config.yaml` points at a real repository and a `gh` account that exists on this machine.
+To set up by hand, follow the same file.
 
 ## Usage
 
