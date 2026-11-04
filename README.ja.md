@@ -24,26 +24,15 @@ npm には公開していません。リポジトリを clone して使います
 ```sh
 git clone https://github.com/noafixinc/orcapod.git
 cd orcapod
-pnpm install --frozen-lockfile
 ```
 
-サンプルから設定を作ります。`cp -n` は既存ファイルを上書きせず、飛ばすと終了コード 1 を返すため、各行を個別に実行してください。
+設定は AI エージェントに任せます。clone したディレクトリで Claude Code か Codex CLI を開き、次のように頼んでください。
 
-```sh
-cp -n examples/config.yaml config.yaml
-mkdir -p prompts
-cp -n examples/prompts/*.md prompts/
-```
+> docs/setup.md に従って orcapod をセットアップして
 
-`config.yaml` のプロジェクト名・パス・リポジトリ・GitHub アカウント・監視条件を編集し、条件で使う `kind` / `ai` の組ごとに `prompts/<kind>.<ai>.md` を用意します。設定例は [examples/config.yaml](examples/config.yaml) を参照してください。無人実行用の AI 起動コマンドとプロンプトの内容も確認してください。
+[docs/setup.md](docs/setup.md) はエージェントが従う手順書です（英語）。エージェントは必要なものを確認し、監視するリポジトリ・ラベル・書き手の条件・プロンプトをあなたに確認し、[セキュリティ上の注意](#セキュリティ上の注意) にある無人実行の許可について同意を取ってから、`config.yaml` と `prompts/` を書き、`validate` と `doctor` が通るまで直します。あなたにしかできない手順（Orca の起動とフォルダの追加、`gh auth login`、各 AI CLI の信頼ダイアログの承諾、最後にあなたの端末で `make start`）は、エージェントがあなたに依頼します。
 
-```sh
-make validate
-make doctor
-make start
-```
-
-`validate` と `doctor` は、`config.yaml` が実在するリポジトリと `gh` にあるアカウントを指すまで失敗します。
+手作業で設定する場合も同じ手順書に従ってください。
 
 ## 基本操作
 

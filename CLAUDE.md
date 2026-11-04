@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 orcapod is a resident CLI for macOS. It detects GitHub issues / PRs by label and author rules, waits a configurable delay, launches Claude Code / Codex CLI in an Orca tab, decides completion from the `runs/<id>/result.json` the AI writes, and closes the tab. orcapod itself never writes to GitHub (the AI CLI does, following the prompt).
 
-There is no specification document. The source of truth is the code and the tests (the `describe` / `it` names in `test/*.test.ts` enumerate the contract). Installation and daily operation are in `README.md`; the configuration shape is in `examples/config.yaml` and `src/config.ts`.
+There is no specification document. The source of truth is the code and the tests (the `describe` / `it` names in `test/*.test.ts` enumerate the contract). The setup procedure (written for an AI agent) is `docs/setup.md`, daily operation is in `README.md`; the configuration shape is in `examples/config.yaml` and `src/config.ts`.
 
 ## Commands
 
@@ -94,7 +94,7 @@ The home is `ORCAPOD_HOME` (non-empty value) or, if unset, the repository root (
 ## Tests
 
 - Every test uses an `mkdtempSync` temporary home and injects `CycleDeps` / `ExecFile`. `daemon.test.ts` `vi.mock`s `node:timers/promises`
-- The real orca / gh / osascript / claude / codex are never started. Child processes are `git` (temporary repositories), `bash` (the generated `launch.sh`, with fake `gh` and AI commands on PATH), `/bin/sh` (the README copy steps), and `bin/orcapod.js` (CLI process tests under `test/helpers/` and `test/fixtures/`, plus `logs` in `home.test.ts`)
+- The real orca / gh / osascript / claude / codex are never started. Child processes are `git` (temporary repositories), `bash` (the generated `launch.sh`, with fake `gh` and AI commands on PATH), `/bin/sh` (the `docs/setup.md` copy steps), and `bin/orcapod.js` (CLI process tests under `test/helpers/` and `test/fixtures/`, plus `logs` in `home.test.ts`)
 - Test fixtures use neutral names only (user `alice` / `taylor`, organisation `acme-corp`, repository `todos`). `test/examples.test.ts` X5a rejects the current machine's home directory, the origin owner and any `/Users/<name>` other than `/Users/you` inside `examples/`
 
 ## Operational data
