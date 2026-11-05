@@ -1,6 +1,4 @@
 import { isAllowedAuthor, ruleKey } from './config.ts'
-import { advanceIncidents, attachIncident, recoveryAdmission, serveIncidentRequest } from './incidents.ts'
-import { parseProposal } from './incident-contract.ts'
 import { runTitle } from './launch.ts'
 import { WAITING_TOOL_NAMES, findAgent, findTerminal, usablePane } from './orca.ts'
 import { ownValue, setOwnValue } from './records.ts'
@@ -27,7 +25,7 @@ const EMPTY_LIST: TerminalList = { terminals: [], complete: false }
 export function tick(state: State, obs: Observations): { state: State; effects: Effect[] } {
   const draft = structuredClone(state)
   const effects: Effect[] = []
-  const steps: Step[] = [serve, detect, fire, advanceIncidents, schedule, recover, track, watchOrca]
+  const steps: Step[] = [serve, detect, fire, schedule, recover, track, watchOrca]
   for (const step of steps) step(draft, obs, effects)
   return { state: draft, effects }
 }
@@ -43,7 +41,6 @@ export function applyLaunch(state: State, runId: string, result: { ok: true; orc
     setPhase(run, { kind: 'starting', since: now }, now)
   } else {
     setPhase(run, { kind: 'failed', at: now, reason: `launch failed: ${result.error}`, tabClosed: false, launchFailed: true }, now)
-    attachIncident(run, now)
   }
   return draft
 }
@@ -93,12 +90,7 @@ function serveRequest(draft: State, file: string, request: Request, obs: Observa
     return
   }
   if (request.type === 'stop') stopRun(run, obs, effects)
-  else if (request.type === 'investigate' || request.type === 'approve') {
-    const error = serveIncidentRequest(draft, run, request, obs.now)
-    if (error !== null) effects.push({ type: 'log', level: 'warn', message: `request ${file}: ${error}` })
-  } else if (run.recovery !== undefined) {
-    effects.push({ type: 'log', level: 'warn', message: `request ${file}: a recovery child run cannot be rerun; check the original incident` })
-  } else rerunRun(draft, file, run, obs.now)
+  else rerunRun(draft, file, run, obs.now)
 }
 
 function serveRun(draft: State, file: string, request: RunRequest, obs: Observations, effects: Effect[]): void {
@@ -293,9 +285,7 @@ function schedule(draft: State, obs: Observations, effects: Effect[]): void {
   }
   const queued = draft.runs.filter((run) => run.phase.kind === 'queued').sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
   for (const run of queued) {
-    const recovery = recoveryAdmission(draft, run, obs)
-    if (recovery === 'wait') continue
-    const admission = recovery === 'gone' ? { kind: 'gone' as const } : admissionOf(obs.config, run)
+    const admission = admissionOf(obs.config, run)
     if (admission.kind === 'gone') {
       setPhase(run, { kind: 'aborted', at: obs.now, reason: 'rule is not in the config' }, obs.now)
       effects.push({ type: 'log', level: 'warn', message: `run ${run.id}: rule ${ruleKey(run.project, run.rule)} is not in the config; aborted the queued run` })
@@ -382,7 +372,7 @@ function recover(draft: State, obs: Observations, effects: Effect[]): void {
 function track(draft: State, obs: Observations, effects: Effect[]): void {
   for (const run of draft.runs) {
     if (run.orca === null || run.paneRecoveredAt === obs.now) continue
-    if (run.phase.kind === 'failed' || (run.recovery !== undefined && run.phase.kind === 'done')) {
+    if (run.phase.kind === 'failed') {
       if (obs.orca.ok && !run.phase.tabClosed && isVanished(sightPane(run.orca, run.target.path, obs.orca))) run.phase.tabClosed = true
       continue
     }
@@ -415,13 +405,6 @@ function trackResult(run: Run, phase: Starting | Running, obs: Observations, eff
   const observed = ownValue(obs.results, run.id)
   if (observed === undefined) return null
   const file = parseResultFile(observed.raw)
-  if (file !== null && run.recovery !== undefined) {
-    if (file.status === 'done' && ((run.recovery.stage === 'prepare' && file.proposal === undefined) || (run.recovery.stage === 'apply' && !file.verification?.length))) {
-      fail(run, 'recovery result has no proposal or post-apply verification', obs.now, effects)
-      return 'failed'
-    }
-    run.recoveryResult = file
-  }
   if (file?.status === 'failed') {
     fail(run, `AI reported failed: ${file.summary}`, obs.now, effects)
     return 'failed'
@@ -523,15 +506,12 @@ function parseResultFile(raw: string): ResultFile | null {
     return null
   }
   if (typeof json !== 'object' || json === null || Array.isArray(json)) return null
-  const { status, summary, links, proposal, verification } = json as Record<string, unknown>
+  const { status, summary, links } = json as Record<string, unknown>
   if (status !== 'done' && status !== 'failed') return null
-  const parsedProposal = parseProposal(proposal)
   return {
     status,
     summary: typeof summary === 'string' ? summary : '',
     links: Array.isArray(links) ? links.filter((link): link is string => typeof link === 'string') : [],
-    ...(parsedProposal === null ? {} : { proposal: parsedProposal }),
-    ...(Array.isArray(verification) && verification.length <= 100 && verification.every((value) => typeof value === 'string' && value.trim() !== '') ? { verification } : {}),
   }
 }
 
@@ -549,7 +529,6 @@ function watchOrca(draft: State, obs: Observations, effects: Effect[]): void {
 
 function fail(run: Run, reason: string, now: string, effects: Effect[], launchFailed = false): void {
   setPhase(run, launchFailed ? { kind: 'failed', at: now, reason, tabClosed: false, launchFailed: true } : { kind: 'failed', at: now, reason, tabClosed: false }, now)
-  attachIncident(run, now)
   effects.push({ type: 'notify', key: `failed:${run.id}`, title: 'orcapod: failed', message: `${runLabel(run)}: ${reason}` })
 }
 

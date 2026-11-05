@@ -128,8 +128,6 @@ describe('formatStatus', () => {
       '  aa11bb "#124 Feature" waiting 1m (--now)',
       'Running:',
       '  3f9a1c "#123 Feature" running/working 24m',
-      'Unresolved:',
-      '  c0ffee "#99 Feature" not investigated → orcapod incident c0ffee',
       'Recent:',
       '  8be0d2 "Dependabot ×5" done 10-23 10:02 "4 merged, 1 needs attention #88"',
       '  c0ffee "#99 Feature" failed 10-23 09:50 (AI reported failed: tests do not pass)',
@@ -268,5 +266,21 @@ describe('resolveRunId', () => {
     ['partial id that is not the last 6 characters', '0917-3f9a1c', { ok: false, error: 'no run matches 0917-3f9a1c (give the last 6 characters of the id or the full id; see orcapod status --history)' }],
   ])('%s', (_name, query, expected) => {
     expect(resolveRunId(runs, query)).toEqual(expected)
+  })
+})
+
+describe('incident removal: I9', () => {
+  it('K9-1: both closed and open failed tabs are Recent with reasons and no Unresolved section', () => {
+    const state = stateWith({ runs: [
+      run({ id: '20261023-0900-aaaaaa', phase: { kind: 'failed', at: NOW, reason: 'closed failure', tabClosed: true } }),
+      run({ id: '20261023-0900-bbbbbb', phase: { kind: 'failed', at: NOW, reason: 'open failure', tabClosed: false } }),
+    ] })
+    const output = formatStatus({ state, config, daemonPid: null, now: NOW, history: false })
+    expect(output).not.toContain('Unresolved:')
+    const recent = output.split('Recent:')[1]
+    expect(recent).toContain('aaaaaa')
+    expect(recent).toContain('(closed failure)')
+    expect(recent).toContain('bbbbbb')
+    expect(recent).toContain('(open failure)')
   })
 })

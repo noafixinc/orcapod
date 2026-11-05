@@ -314,7 +314,7 @@ describe('renderScreen: tier layout of the standard screen', () => {
     expect(lines).toEqual([
       ` orcapod monitor  daemon: running pid 4242 (updated 3s ago)  Orca 1.4.217  GitH…`,
       `┌ Attention 1 ${'─'.repeat(65)}┐`,
-      '│ ! 7a44f0  todos      #119 Feature   failed 10-23 0… → orcapod incident 7a44f0│',
+      '│ ! 7a44f0  todos      #119 Feature   failed 10-23 09:55… → orcapod stop 7a44f0│',
       `│${' '.repeat(78)}│`,
       `├ Running 1 (todos 1/2) ${'─'.repeat(55)}┤`,
       `│   3f9a1c  todos      #123 Feature   running/working 24m${' '.repeat(22)}│`,

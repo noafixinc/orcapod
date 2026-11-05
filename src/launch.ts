@@ -1,6 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { recoveryPrompt } from './incident-prompt.ts'
 import { panePath, resultPath, runDir, runsDir } from './paths.ts'
 import { renderPrompt } from './prompt.ts'
 import type { Config, Run } from './types.ts'
@@ -9,8 +8,7 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`
 }
 
-export function runTitle(run: Pick<Run, 'rule' | 'kindName' | 'items' | 'recovery'>): string {
-  if (run.recovery !== undefined) return `${run.kindName} ${run.recovery.sourceRunId.slice(-6)}`
+export function runTitle(run: Pick<Run, 'rule' | 'kindName' | 'items'>): string {
   const [first] = run.items
   if (run.rule.batch === 'each' && first !== undefined) return `#${first.number} ${run.kindName}`
   return `${run.kindName} ×${run.items.length}`
@@ -21,7 +19,7 @@ export type RunDirMode = 'create' | 'reuse-relaunch'
 export function prepareRun(home: string, run: Run, config: Config, mode: RunDirMode = 'create'): { launchScript: string; title: string; command: string } {
   const promptKey = `${run.rule.kind}.${run.rule.ai}`
   const template = config.prompts.get(promptKey)
-  if (template === undefined && run.recovery === undefined) throw new Error(`prompts/${promptKey}.md is missing`)
+  if (template === undefined) throw new Error(`prompts/${promptKey}.md is missing`)
 
   const dir = runDir(home, run.id)
   mkdirSync(runsDir(home), { recursive: true })
@@ -29,7 +27,7 @@ export function prepareRun(home: string, run: Run, config: Config, mode: RunDirM
 
   const promptFile = join(dir, 'prompt.md')
   const launchScript = join(dir, 'launch.sh')
-  writeFileSync(promptFile, run.recovery === undefined ? renderPrompt(template!, {
+  writeFileSync(promptFile, renderPrompt(template, {
     projectName: run.project,
     projectPath: run.target.path,
     repo: run.target.repo,
@@ -37,7 +35,7 @@ export function prepareRun(home: string, run: Run, config: Config, mode: RunDirM
     items: run.items,
     runId: run.id,
     resultPath: resultPath(home, run.id),
-  }) : recoveryPrompt(home, run))
+  }))
   writeFileSync(join(dir, 'meta.json'), `${JSON.stringify(run, null, 2)}\n`)
   writeFileSync(launchScript, launchScriptBody({
     paneFile: panePath(home, run.id),

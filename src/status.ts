@@ -1,4 +1,3 @@
-import { incidentLabel, unresolved } from './incident-contract.ts'
 import { ruleKey } from './config.ts'
 import { runTitle } from './launch.ts'
 import { ownValue } from './records.ts'
@@ -34,7 +33,6 @@ export function formatStatus(view: StatusView): string {
     ...section('Pending', [...state.pending].sort((a, b) => Date.parse(a.fireAt) - Date.parse(b.fireAt)).map((pending) => pendingLine(pending, state, config, now))),
     ...section('Queue', state.runs.flatMap((run) => (run.phase.kind === 'queued' ? [queuedLine(run, run.phase.since, now)] : []))),
     ...section('Running', state.runs.filter(isActive).map((run) => activeLine(run, now))),
-    ...(state.runs.some(unresolved) ? section('Unresolved', state.runs.filter(unresolved).map((run) => `${runLabel(run)} ${incidentLabel(run.incident)} → orcapod incident ${shortRunId(run.id)}`)) : []),
     ...(view.history
       ? section(`History (${state.runs.length})`, [...state.runs].sort(byNewest((run) => run.createdAt)).map(historyLine))
       : section('Recent', finishedRuns(state.runs).slice(0, RECENT_LIMIT).map(({ run, phase }) => `${runLabel(run)} ${finishedText(phase)}`))),

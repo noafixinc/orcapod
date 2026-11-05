@@ -2,7 +2,6 @@ import { createHash, randomBytes } from 'node:crypto'
 import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockPath, requestsDir, stateDir, statePath } from './paths.ts'
-import { validIncident, validRecovery, parseProposal } from './incident-contract.ts'
 import { ASSOCIATIONS } from './types.ts'
 import type { Item, ReadRequest, Request, Rule, RunPhase, State } from './types.ts'
 
@@ -93,14 +92,6 @@ const runShapeError: ShapeCheck = (value) => {
   if (error !== null) return error
   if (value.paneRecoveredAt !== undefined && typeof value.paneRecoveredAt !== 'string') return 'paneRecoveredAt is not a string'
   if (value.launchUncertain !== undefined && typeof value.launchUncertain !== 'boolean') return 'launchUncertain is not a boolean'
-  if (value.incident !== undefined && !validIncident(value.incident)) return 'incident is malformed'
-  if (value.recovery !== undefined && !validRecovery(value.recovery)) return 'recovery is malformed'
-  if (value.recoveryResult !== undefined) {
-    const result = value.recoveryResult
-    if (!isRecord(result) || !['done', 'failed'].includes(String(result.status)) || !isString(result.summary) || !isStringArray(result.links)) return 'recoveryResult is malformed'
-    if (result.proposal !== undefined && parseProposal(result.proposal) === null) return 'recoveryResult.proposal is malformed'
-    if (result.verification !== undefined && !isStringArray(result.verification)) return 'recoveryResult.verification is malformed'
-  }
   const { kind, tabClosed, launchFailed } = value.phase as Record<string, unknown>
   if (!PHASE_KINDS.some((k) => k === kind)) return `phase.kind is not one of ${PHASE_KINDS.join(' / ')}: ${JSON.stringify(kind)}`
   if (kind !== 'failed') return null
@@ -185,6 +176,22 @@ function fillFieldsAbsentBefore002(parsed: unknown): void {
   }
 }
 
+function dropIncidentLayer(parsed: unknown): void {
+  if (!isRecord(parsed) || !Array.isArray(parsed.runs)) return
+  for (const run of parsed.runs) {
+    if (!isRecord(run)) continue
+    if ('recovery' in run && isRecord(run.phase) && !['done', 'failed', 'aborted'].includes(String(run.phase.kind))) {
+      const at = run.phase.since ?? run.phase.at ?? run.createdAt
+      const tabClosed = run.phase.kind === 'queued'
+      run.phase = { kind: 'failed', at, reason: 'incident layer removed; the run was not finished', tabClosed }
+      if (Array.isArray(run.history)) run.history.push({ kind: 'failed', at })
+    }
+    delete run['incident']
+    delete run['recovery']
+    delete run['recoveryResult']
+  }
+}
+
 function brokenStateError(path: string, cause: unknown): Error {
   return new Error(`${path} is corrupt: ${(cause as Error).message}`, { cause })
 }
@@ -200,6 +207,7 @@ function orBrokenState<T>(path: string, operation: () => T): T {
 function parseState(text: string, path: string): State {
   const parsed = orBrokenState<unknown>(path, () => JSON.parse(text))
   fillFieldsAbsentBefore002(parsed)
+  dropIncidentLayer(parsed)
   const shapeError = stateShapeError(parsed)
   if (shapeError !== null) throw new Error(`${path} is corrupt: ${shapeError}`)
   return parsed as State
@@ -287,12 +295,6 @@ function parseRequest(value: unknown): Request | string {
       return value.ai === undefined
         ? { type: 'run', project: value.project, item: value.item, kind: value.kind, now: value.now }
         : { type: 'run', project: value.project, item: value.item, kind: value.kind, ai: value.ai, now: value.now }
-    case 'approve':
-      if (typeof value.runId !== 'string' || typeof value.revision !== 'string' || !SHA256_HEX_PATTERN.test(value.revision)) return 'approve has an invalid runId / revision'
-      return { type: 'approve', runId: value.runId, revision: value.revision }
-    case 'investigate':
-      if (typeof value.runId !== 'string' || typeof value.evidence !== 'string' || value.evidence.length > 16_000) return 'investigate has an invalid runId / evidence'
-      return { type: 'investigate', runId: value.runId, evidence: value.evidence }
     case 'stop':
     case 'rerun':
       if (typeof value.runId !== 'string') return 'runId is not a string'

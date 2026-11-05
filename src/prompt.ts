@@ -47,7 +47,7 @@ When the work is finished, write the following JSON to ${resultPath} (the direct
 {"status": "done" | "failed", "summary": "1-3 sentence summary", "links": ["URLs of the pull requests or comments you created"]}
 
 - done: you completed the requested work
-- failed: you could not complete it. Write the reason in summary. When you stop because the user has to make a decision, also use failed and write in summary what you need them to decide
+- failed: you could not complete it. Write in summary the reason and the concrete next action a human must take to resolve it. When you stop because the user has to make a decision, also use failed and write in summary what you need them to decide
 
 Complete the JSON in a single write (do not write partial content and then append to it. When you rewrite it, rewrite the whole file). Once it is written, end the work. You do not need to exit the CLI (orcapod closes the tab). Also, do not wait for further input. For orcapod, the run is treated as still working until this JSON exists (you may end a turn once in the meantime, for example while waiting for CI).
 `

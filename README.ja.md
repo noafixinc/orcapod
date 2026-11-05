@@ -59,17 +59,14 @@ cd orcapod
 node bin/orcapod.js run --project your-project --issue 42 --kind feature --ai claude --now
 ```
 
-実行の停止・再実行、失敗した実行の問題解決:
+実行の停止・再実行:
 
 ```sh
 node bin/orcapod.js stop 20261023-0917-3f9a1c
 node bin/orcapod.js rerun 20261023-0917-3f9a1c
-node bin/orcapod.js incident 20261023-0917-3f9a1c
-node bin/orcapod.js investigate 20261023-0917-3f9a1c
-node bin/orcapod.js approve 20261023-0917-3f9a1c <revision>
 ```
 
-`run` / `stop` / `rerun` / `investigate` / `approve` は `state/requests/` に依頼ファイルを置くだけで、常駐が次の 20 秒サイクルで読んで処理します。
+`run` / `stop` / `rerun` は `state/requests/` に依頼ファイルを置くだけで、常駐が次の 20 秒サイクルで読んで処理します。
 
 ## 設定
 

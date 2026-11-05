@@ -804,7 +804,7 @@ describe('track: starting', () => {
 })
 
 describe('track: running', () => {
-  it('C14: if result.json done comes first, only saves without closing, and closes when a done that started afterwards is observed', () => {
+  it('K7-2 / C14: if result.json done comes first, only saves without closing, and closes when a done that started afterwards is observed', () => {
     const results = { 'run-a': { raw: resultFile('done'), mtime: at(10) } }
     const first = tick(stateWith({ runs: [runWith()] }), obsAt(at(11), { orca: seen({ agents: [agent('working', at(1))] }), results }))
     expect(first.effects).toEqual([])
@@ -842,7 +842,7 @@ describe('track: running', () => {
     expect(later.effects).toEqual([{ type: 'notify', key: 'done-no-result:run-a', title: 'orcapod: no result', message: `${LABEL}: the turn ended without a result (10 minutes)` }])
   })
 
-  it('C16: a broken result.json becomes failed after a 60-second grace period, and close is not issued', () => {
+  it('K4-2 / C16: a broken result.json becomes failed after a 60-second grace period, and close is not issued', () => {
     const broken = { 'run-a': { raw: '{', mtime: at(1) } }
     const orca = seen({ agents: [agent('done', at(1, 30))] })
     const first = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca, results: broken }))
@@ -851,6 +851,8 @@ describe('track: running', () => {
     const later = tick(first.state, obsAt(at(3, 1), { orca, results: broken }))
     expect(later.effects).toEqual([{ type: 'notify', key: 'failed:run-a', title: 'orcapod: failed', message: `${LABEL}: result.json is invalid` }])
     expect(onlyRun(later.state).phase).toEqual({ kind: 'failed', at: '2026-10-23T00:03:01.000Z', reason: 'result.json is invalid', tabClosed: false })
+    const repeated = tick(later.state, obsAt(at(4), { orca, results: broken }))
+    expect(repeated.effects.filter((effect) => effect.type === 'notify' && effect.key === 'failed:run-a')).toEqual([])
   })
 
   it('C16: if it becomes a valid done during the grace period, invalidResultSince is cleared and it proceeds to judgment', () => {
@@ -866,10 +868,12 @@ describe('track: running', () => {
     expect(onlyRun(state).phase).toMatchObject({ kind: 'running', invalidResultSince: '2026-10-23T00:02:00.000Z' })
   })
 
-  it('C17: if result.json has status: failed, makes it failed, does not issue close, and notifies once', () => {
+  it('K4-1 / C17: if result.json has status: failed, makes it failed, does not issue close, and notifies once', () => {
     const { state, effects } = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca: seen({ agents: [agent('done', at(1, 30))] }), results: { 'run-a': { raw: resultFile('failed', 'tests do not pass'), mtime: at(1) } } }))
     expect(effects).toEqual([{ type: 'notify', key: 'failed:run-a', title: 'orcapod: failed', message: `${LABEL}: AI reported failed: tests do not pass` }])
     expect(onlyRun(state).phase).toEqual({ kind: 'failed', at: '2026-10-23T00:02:00.000Z', reason: 'AI reported failed: tests do not pass', tabClosed: false })
+    const repeated = tick(state, obsAt(at(4), { orca: seen({ agents: [agent('done', at(1, 30))] }), results: { 'run-a': { raw: resultFile('failed', 'tests do not pass'), mtime: at(1) } } }))
+    expect(repeated.effects.filter((effect) => effect.type === 'notify' && effect.key === 'failed:run-a')).toEqual([])
   })
 
   it('C18: aborted if the pane is in neither a complete listing nor agents, close is not issued, and 1 notification', () => {
@@ -1090,7 +1094,7 @@ describe('serve', () => {
     expect(after.effects).toEqual([{ type: 'close', runId: 'run-a', handle: 'term_a' }, { type: 'consumeRequest', file: 's2.json' }, { type: 'log', level: 'info', message: 'reconnected to Orca' }])
   })
 
-  it('C25: rerun creates a manual queued run with the same items / rule / target and does not change processed. A nonexistent id gets warn + consume', () => {
+  it('K6-3 / C25: rerun creates a manual queued run with the same items / rule / target and does not change processed. A nonexistent id gets warn + consume', () => {
     const processed = [{ key: '["todos","issue",123,"impl"]', seenAt: T0 }]
     const original = runWith({ phase: { kind: 'failed', at: T0, reason: 'x', tabClosed: false } })
     const requests = [
@@ -1371,5 +1375,14 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: failure-path wording, launch failu
     const c3 = tick(c2.state, obsAt(at(13), { orca: waiting }))
     expect([c1, c2, c3].flatMap(({ effects }) => noticeKeys(effects))).toEqual(['waiting:run-a'])
     expect(onlyRun(c3.state).notified).toEqual(['waiting'])
+  })
+})
+
+describe('incident removal: I7', () => {
+  it('K7-1: a concurrency limit of one launches exactly one of two queued runs', () => {
+    const initial = stateWith({ runs: [queuedRun('first', T0), queuedRun('second', at(1))] })
+    const next = tick(initial, obsAt(at(2), { config: configWith([projectWith()], 1) }))
+    expect(next.effects).toEqual([{ type: 'launch', runId: 'first' }])
+    expect(next.state.runs.map((run) => run.phase.kind)).toEqual(['launching', 'queued'])
   })
 })

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { loadConfig, ruleKey } from '../src/config.ts'
 import { buildMonitorModel, configViewOf, daemonHealthOf } from '../src/monitor-model.ts'
 import type { ConfigView, MonitorInput, MonitorModel, Row, SectionId } from '../src/monitor-model.ts'
+import { tick } from '../src/tick.ts'
 import { loadState } from '../src/state.ts'
 import type { Config, ConfigResult, Item, Project, Rule, Run, State } from '../src/types.ts'
 
@@ -311,14 +312,14 @@ describe('buildMonitorModel: header and configuration view', () => {
 })
 
 describe('buildMonitorModel: attention', () => {
-  it('A15: failed stays in attention even after the tab is closed and points to checking the original problem', () => {
+  it('A15: failed moves from attention to recent after the tab is closed', () => {
     const left = runWith({ id: '20261023-0900-7a44f0', phase: { kind: 'failed', at: secondsBefore(300), reason: 'AI reported failed: type error', tabClosed: false } })
     const closed = runWith({ id: '20261023-0800-c0ffee', phase: { kind: 'failed', at: secondsBefore(900), reason: 'result.json is invalid', tabClosed: true } })
     const model = modelOf(stateWith({ runs: [left, closed] }))
     expect(sectionsHolding(model, left.id)).toEqual(['attention'])
-    expect(sectionsHolding(model, closed.id)).toEqual(['attention'])
-    expect(rowsOf(model, 'attention').map((row) => row.hint)).toEqual(['→ orcapod incident 7a44f0', '→ orcapod incident c0ffee'])
-    expect(titleOf(model, 'attention')).toBe('Attention 2')
+    expect(sectionsHolding(model, closed.id)).toEqual(['recent'])
+    expect(rowsOf(model, 'attention').map((row) => row.hint)).toEqual(['→ orcapod stop 7a44f0'])
+    expect(titleOf(model, 'attention')).toBe('Attention 1')
   })
 
   it('A18: a starting run the daemon has not yet judged as stalled stays in running even after 10 minutes; with a starting-stall mark it goes to attention and points to the trust dialog', () => {
@@ -374,7 +375,7 @@ describe('buildMonitorModel: attention', () => {
       ],
     }))
     const model = modelOf(loadState(home))
-    expect(rowsOf(model, 'attention').map((row) => row.hint)).toEqual(['→ orcapod incident aaaaaa', '→ orcapod incident bbbbbb'])
+    expect(rowsOf(model, 'attention').map((row) => row.hint)).toEqual(['→ orcapod stop aaaaaa', '→ orcapod stop bbbbbb'])
     expect(rowsOf(model, 'recent')).toEqual([])
     expect(model.header).toContainEqual({ text: 'Orca version unknown (daemon is the 001 version)', alert: false })
   })
@@ -473,7 +474,7 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     ])
   })
 
-  it('recent results are done / aborted, unresolved failed stays in attention even after the tab is closed, and the history lists everything', () => {
+  it('recent results include closed failed runs, and the history lists everything', () => {
     const model = modelOf(stateWith({
       runs: [
         runWith({ id: 'r-aaaaa1', phase: { kind: 'aborted', at: secondsBefore(1200), reason: 'orcapod stop' } }),
@@ -484,6 +485,7 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     }))
     expect(rowsOf(model, 'recent').map((row) => cellsOf(row).phase)).toEqual([
       'done 10-23 09:55 "created PR #130" (tab remains)',
+      'failed 10-23 09:50 (result.json is invalid)',
       'aborted 10-23 09:40 (orcapod stop)',
     ])
     expect(model.history.map((row) => row.ref)).toEqual([
@@ -516,5 +518,49 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
       { project: 'gone', note: 'not polled yet  watch error folder not found' },
     ])
     expect(titleOf(model, 'active')).toBe('Running 1 (todos 1/?)')
+  })
+})
+
+describe('incident removal: I1', () => {
+  it('K1-1: failed with an open tab appears only in Attention with a stop hint', () => {
+    const run = runWith({ phase: { kind: 'failed', at: NOW, reason: 'failed', tabClosed: false } })
+    const model = modelOf(stateWith({ runs: [run] }))
+    expect(sectionsHolding(model, run.id)).toEqual(['attention'])
+    expect(rowsOf(model, 'attention')[0].hint).toBe(`→ orcapod stop ${run.id.slice(-6)}`)
+  })
+
+  it('K1-2: failed with a closed tab appears only in Recent and Attention is empty', () => {
+    const run = runWith({ phase: { kind: 'failed', at: NOW, reason: 'failed', tabClosed: true } })
+    const model = modelOf(stateWith({ runs: [run] }))
+    expect(sectionsHolding(model, run.id)).toEqual(['recent'])
+    expect(titleOf(model, 'attention')).toBe('Attention none')
+  })
+
+  it('K1-3: stopping a failed launch without a pane moves it from Attention to Recent', () => {
+    const run = runWith({ orca: null, phase: { kind: 'failed', at: NOW, reason: 'launch failed', tabClosed: false, launchFailed: true } })
+    const initial = stateWith({ runs: [run] })
+    expect(sectionsHolding(modelOf(initial), run.id)).toEqual(['attention'])
+    const next = tick(initial, { now: NOW, config, github: {}, orca: { ok: true, agents: new Map(), terminals: new Map(), hooks: null }, results: {}, panes: {}, requests: [{ file: 'stop.json', request: { type: 'stop', runId: run.id } }] })
+    expect(next.state.runs[0].phase).toMatchObject({ tabClosed: true })
+    expect(sectionsHolding(modelOf(next.state), run.id)).toEqual(['recent'])
+  })
+
+  it('K1-4: loading a closed failed run with an old incident shows it only in Recent', () => {
+    const home = tempHome()
+    const run = { ...runWith({ phase: { kind: 'failed', at: NOW, reason: 'failed', tabClosed: true } }), incident: { status: 'awaiting_approval' } }
+    mkdirSync(join(home, 'state'))
+    writeFileSync(join(home, 'state', 'state.json'), JSON.stringify(stateWith({ runs: [run] })))
+    const loaded = loadState(home)
+    expect(loaded.runs[0]).not.toHaveProperty('incident')
+    expect(sectionsHolding(modelOf(loaded), run.id)).toEqual(['recent'])
+  })
+
+  it('K1-5: only failed is Attention while an open done run is Recent with tab remains', () => {
+    const failed = runWith({ id: '20261023-0900-aaaaaa', phase: { kind: 'failed', at: NOW, reason: 'failed', tabClosed: false } })
+    const done = runWith({ id: '20261023-0900-bbbbbb', phase: { kind: 'done', at: NOW, summary: 'finished', tabClosed: false } })
+    const model = modelOf(stateWith({ runs: [failed, done] }))
+    expect(sectionsHolding(model, failed.id)).toEqual(['attention'])
+    expect(sectionsHolding(model, done.id)).toEqual(['recent'])
+    expect(cellsOf(rowsOf(model, 'recent')[0]).phase).toContain('(tab remains)')
   })
 })

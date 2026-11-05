@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { openIncident, proposalRevision } from '../src/incident-contract.ts'
 import { monitorText } from '../src/monitor.ts'
 import { configPath, lockPath, logPath, promptsDir, stateDir, statePath } from '../src/paths.ts'
 import { loadState, readRequests, saveState } from '../src/state.ts'
@@ -391,7 +390,7 @@ describe('orcapod monitor', () => {
     expect(await orcapod('monitor', option, value)).toEqual({ code: 1, stdout: '', stderr: `${message}\n${MONITOR_USAGE}` })
   })
 
-  it('A7: modules reached by following imports from src/monitor*.ts do not include orca, github, daemon, notify, log, tick, or doctor', () => {
+  it('K10-3 / A7: modules reached by following imports from src/monitor*.ts do not include orca, github, daemon, notify, log, tick, or doctor', () => {
     const srcDir = join(import.meta.dirname, '..', 'src')
     const reached = new Set<string>()
     const pending = ['monitor.ts', 'monitor-model.ts', 'monitor-layout.ts']
@@ -401,63 +400,15 @@ describe('orcapod monitor', () => {
       reached.add(file)
       for (const match of readFileSync(join(srcDir, file), 'utf8').matchAll(/from '\.\/([\w-]+\.ts)'/g)) pending.push(match[1])
     }
-    expect([...reached].sort()).toEqual(['config.ts', 'incident-contract.ts', 'incident-prompt.ts', 'launch.ts', 'monitor-layout.ts', 'monitor-model.ts', 'monitor.ts', 'paths.ts', 'prompt.ts', 'records.ts', 'state.ts', 'status.ts', 'terminal-text.ts', 'types.ts'])
+    expect([...reached].sort()).toEqual(['config.ts', 'launch.ts', 'monitor-layout.ts', 'monitor-model.ts', 'monitor.ts', 'paths.ts', 'prompt.ts', 'records.ts', 'state.ts', 'status.ts', 'terminal-text.ts', 'types.ts'])
   })
 
   it('A7 (additional): the reached modules have neither dynamic imports nor side-effect-only imports, and only config.ts reads node:child_process, which launches processes', () => {
     const srcDir = join(import.meta.dirname, '..', 'src')
-    const reached = ['config.ts', 'incident-contract.ts', 'incident-prompt.ts', 'launch.ts', 'monitor-layout.ts', 'monitor-model.ts', 'monitor.ts', 'paths.ts', 'prompt.ts', 'records.ts', 'state.ts', 'status.ts', 'terminal-text.ts', 'types.ts']
+    const reached = ['config.ts', 'launch.ts', 'monitor-layout.ts', 'monitor-model.ts', 'monitor.ts', 'paths.ts', 'prompt.ts', 'records.ts', 'state.ts', 'status.ts', 'terminal-text.ts', 'types.ts']
     const sources = new Map(reached.map((file) => [file, readFileSync(join(srcDir, file), 'utf8')]))
     expect([...sources].filter(([, text]) => /\bimport\s*\(/.test(text) || /^import\s+['"]/m.test(text)).map(([file]) => file)).toEqual([])
     expect([...sources].filter(([, text]) => /node:child_process|from 'child_process'|require\(/.test(text)).map(([file]) => file)).toEqual(['config.ts'])
-  })
-})
-
-
-describe('incident recovery CLI', () => {
-  it('handles the detail of an existing failure and an investigation-only request, and does not re-run the original processing', async () => {
-    saveState(home, state)
-    const shown = await orcapod('incident', '3f9a1c')
-    expect([shown.code, shown.stderr]).toEqual([0, ''])
-    expect(shown.stdout).toContain('launch failed: x')
-    expect(shown.stdout).toContain('orcapod investigate')
-    const requested = await orcapod('investigate', '3f9a1c')
-    expect(requested).toEqual({ code: 0, stdout: `investigation request placed: ${readRequests(home)[0].file} (the original work is not rerun)\n`, stderr: DAEMON_STOPPED_WARNING })
-    expect(readRequests(home).map((read) => 'request' in read ? read.request : read)).toEqual([{ type: 'investigate', runId: state.runs[0].id, evidence: '' }])
-    expect(loadState(home)).toEqual(state)
-  })
-
-  it('rejects a stale approval and a re-investigation without additional evidence, without creating a request file', async () => {
-    const changed = structuredClone(state)
-    changed.runs[0].incident = { ...openIncident('2026-10-24T00:00:00.000Z'), status: 'blocked', tasks: ['earlier'] }
-    saveState(home, changed)
-    expect(await orcapod('approve', '3f9a1c', '0'.repeat(64))).toEqual({ code: 1, stdout: '', stderr: 'orcapod approve: does not match the revision awaiting approval\n' })
-    expect(await orcapod('investigate', '3f9a1c')).toEqual({ code: 1, stdout: '', stderr: 'orcapod investigate: a new investigation needs added evidence different from the previous one\n' })
-    expect(readRequests(home)).toEqual([])
-  })
-
-  it('shows the approval target in full and requests only approval of the new revision', async () => {
-    const changed = structuredClone(state)
-    const body = { summary: 'align operations', cause: 'documents disagree', evidence: ['checked the code'], changes: [], validation: ['unit tests passed'], actions: ['align the documents and verify'], risks: ['database not verified'] }
-    const revision = proposalRevision(body)
-    changed.runs[0].incident = { ...openIncident('2026-10-24T00:00:00.000Z'), status: 'awaiting_approval', proposal: { body, revision } }
-    saveState(home, changed)
-    const bin = join(home, 'bin')
-    mkdirSync(bin)
-    writeFileSync(join(bin, 'gh'), `#!/bin/sh
-cat <<'JSON'
-Logged in to github.com account taylor
-JSON
-`, { mode: 0o755 })
-    mkdirSync(join(home, 'prompts'))
-    writeFileSync(join(home, 'prompts', 'feature.claude.md'), '{{items}}')
-    writeFileSync(configPath(home), JSON.stringify({ version: 1, settings: {}, kinds: [{ id: 'feature', name: 'Development' }], projects: [{ name: 'todos', path: '/Users/me/git/todos', repo: 'taylor/todos', githubAccount: 'taylor', rules: [{ target: 'issue', label: 'impl', kind: 'feature', ai: 'claude', batch: 'each', delayMinutes: 0 }] }] }))
-    const detail = await orcapod('incident', '3f9a1c')
-    expect([detail.code, detail.stderr]).toEqual([0, ''])
-    for (const value of [body.cause, body.actions[0], body.validation[0], body.risks[0], revision]) expect(detail.stdout).toContain(value)
-    const result = await orcapodIn({ env: { ...process.env, ORCAPOD_HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` } }, 'approve', '3f9a1c', revision)
-    expect(result).toEqual({ code: 0, stdout: `approval request placed: ${readRequests(home)[0].file} (${revision})\n`, stderr: DAEMON_STOPPED_WARNING })
-    expect(readRequests(home).map((read) => 'request' in read ? read.request : read)).toEqual([{ type: 'approve', runId: changed.runs[0].id, revision }])
   })
 })
 
@@ -592,7 +543,7 @@ describe('G1: public CLI normal path, external dependencies, arguments, and outp
     const result = await publicCli(home, ...args)
     expect([result.code, result.signal, result.stdout]).toEqual([1, null, ''])
     expect(result.stderr.startsWith('Usage:\n')).toBe(true)
-    for (const command of ['config', 'validate', 'doctor', 'status', 'up', 'start', 'run', 'stop', 'rerun', 'incident', 'investigate', 'approve', 'logs', 'monitor']) expect(result.stderr).toContain(`  orcapod ${command}`)
+    for (const command of ['config', 'validate', 'doctor', 'status', 'up', 'start', 'run', 'stop', 'rerun', 'logs', 'monitor']) expect(result.stderr).toContain(`  orcapod ${command}`)
   })
 
   it('status warns about a gh read failure and continues showing the saved state', async () => {
@@ -648,51 +599,6 @@ describe('G1: public CLI normal path, external dependencies, arguments, and outp
   })
 })
 
-describe('G1: incident recovery command rejection and additional evidence', () => {
-  it('rerun rejects a recovery child', async () => {
-    saveState(home, { ...state, runs: [{ ...state.runs[0], recovery: { sourceRunId: state.runs[1].id, stage: 'prepare', evidence: [] } }] })
-    expect(await orcapod('rerun', '3f9a1c')).toEqual({ code: 1, stdout: '', stderr: 'an incident run cannot be rerun. Check the original run with orcapod incident\n' })
-    expect(readRequests(home)).toEqual([])
-  })
-
-  it('investigate trims evidence that differs from the previous one and requests it as a single item', async () => {
-    const changed = { ...state, runs: [{ ...state.runs[0], incident: { ...openIncident('2026-10-24T00:00:00.000Z'), status: 'blocked' as const, tasks: ['previous'], evidence: ['old evidence'] } }] }
-    saveState(home, changed)
-    const result = await orcapod('investigate', '3f9a1c', '--evidence', '  new evidence  ')
-    const requests = readRequests(home)
-    expect(requests).toHaveLength(1)
-    expect(requests[0]).toMatchObject({ request: { type: 'investigate', runId: changed.runs[0].id, evidence: 'new evidence' } })
-    expect(result).toEqual({ code: 0, stdout: `investigation request placed: ${requests[0].file} (the original work is not rerun)\n`, stderr: DAEMON_STOPPED_WARNING })
-    expect(loadState(home)).toEqual(changed)
-  })
-
-  it.each([
-    { status: 'blocked', evidence: ' same evidence ', error: 'a new investigation needs added evidence different from the previous one' },
-    { status: 'investigating', evidence: 'new evidence', error: 'cannot start an investigation for an incident that is under investigation, being applied or resolved' },
-    { status: 'resolved', evidence: 'new evidence', error: 'cannot start an investigation for an incident that is under investigation, being applied or resolved' },
-    { status: 'blocked', evidence: 'x'.repeat(16001), error: 'added evidence must be 16000 characters or fewer' },
-  ] as const)('investigate rejects $status / $error and creates no request', async ({ status, evidence, error }) => {
-    const changed = { ...state, runs: [{ ...state.runs[0], incident: { ...openIncident('2026-10-24T00:00:00.000Z'), status, tasks: ['previous'], evidence: ['same evidence'] } }] }
-    saveState(home, changed)
-    expect(await orcapod('investigate', '3f9a1c', '--evidence', evidence)).toEqual({ code: 1, stdout: '', stderr: `orcapod investigate: ${error}\n` })
-    expect(readRequests(home)).toEqual([])
-    expect(loadState(home)).toEqual(changed)
-  })
-
-  it('approve rejects a proposal for a repository that is not allowed and creates no request', async () => {
-    const { projectPath } = setupCliHome(home)
-    const outside = join(home, 'outside')
-    execFileSync('git', ['init', '-q', outside])
-    const body = { summary: 'fix', cause: 'cause', evidence: ['evidence'], changes: [{ path: outside, head: 'a'.repeat(40), summary: 'not allowed' }], validation: ['checked'], actions: ['apply'], risks: [] }
-    const revision = proposalRevision(body)
-    const changed = { ...state, runs: [{ ...state.runs[0], target: { ...state.runs[0].target, path: projectPath }, incident: { ...openIncident('2026-10-24T00:00:00.000Z'), status: 'awaiting_approval' as const, proposal: { body, revision } } }] }
-    saveState(home, changed)
-    expect(await publicCli(home, 'approve', '3f9a1c', revision)).toEqual({ code: 1, signal: null, stdout: '', stderr: `orcapod approve: change target is not an allowed repository: ${outside}\n` })
-    expect(readRequests(home)).toEqual([])
-    expect(loadState(home)).toEqual(changed)
-  })
-})
-
 describe('SPEC-ENGLISH-OUTPUT-001 conditions: the CLI says nothing in Japanese and keeps its exit codes', () => {
   const AT = '2026-10-23T00:20:00.000Z'
 
@@ -702,9 +608,6 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: the CLI says nothing in Japanese a
 
   function everyStatusState(): State {
     const base = run('20261023-0900-aaaaaa')
-    const proposalBody = { summary: 'align operations', cause: 'documents disagree', evidence: ['checked the code'], changes: [], validation: ['unit tests passed'], actions: ['align the documents and verify'], risks: ['database not verified'] }
-    const failedWith = (id: string, incident: Run['incident'], reason = 'AI reported failed: tests do not pass'): Run => ({ ...base, id, phase: { kind: 'failed', at: AT, reason, tabClosed: false }, ...(incident === undefined ? {} : { incident }) })
-    const open = openIncident(AT)
     return {
       ...state,
       pending: [{ ruleKey: '["todos","issue","impl"]', project: 'todos', items: [{ project: 'todos', repo: 'taylor/todos', target: 'issue', number: 9, title: 'Pending work', url: 'https://github.com/taylor/todos/issues/9', labels: ['impl'], author: { login: 'taylor', bot: false, association: 'OWNER' } }], fireAt: '2026-10-23T01:00:00.000Z' }],
@@ -713,19 +616,13 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: the CLI says nothing in Japanese a
         { ...base, id: '20261023-0902-a00002', startedAt: null, orca: null, phase: { kind: 'launching', since: AT }, history: [] },
         { ...base, id: '20261023-0903-a00003', phase: { kind: 'running', agent: 'working', agentSince: AT, closeAttempts: 0 }, startedAt: AT },
         { ...base, id: '20261023-0904-a00004', phase: { kind: 'done', at: AT, summary: 'merged', tabClosed: true } },
+        { ...base, id: '20261023-0906-a00006', phase: { kind: 'failed', at: AT, reason: 'AI reported failed: tests do not pass', tabClosed: false } },
         { ...base, id: '20261023-0905-a00005', phase: { kind: 'aborted', at: AT, reason: 'pane and tab disappeared' } },
-        failedWith('20261023-0906-a00006', undefined, 'launch failed: no_pane_key'),
-        failedWith('20261023-0907-a00007', open),
-        failedWith('20261023-0908-a00008', { ...open, status: 'investigating', tasks: ['20261023-0950-b00001'] }),
-        failedWith('20261023-0909-a00009', { ...open, status: 'awaiting_approval', proposal: { body: proposalBody, revision: proposalRevision(proposalBody) } }),
-        failedWith('20261023-0910-a0000a', { ...open, status: 'applying', tasks: ['20261023-0950-b00001'], proposal: { body: proposalBody, revision: proposalRevision(proposalBody) }, approvedRevision: proposalRevision(proposalBody) }),
-        failedWith('20261023-0911-a0000b', { ...open, status: 'blocked', reason: 'investigation limit of 3 reached; review the evidence and proposals' }),
-        failedWith('20261023-0912-a0000c', { ...open, status: 'resolved' }),
       ],
     }
   }
 
-  it('A1-2: usage, validate with a broken config, status and status --history over every phase and incident status, and incident <id> for every incident status print no Japanese', async () => {
+  it('A1-2: usage, validate with a broken config, status and status --history over every phase print no Japanese', async () => {
     const outputs: { stdout: string; stderr: string }[] = []
     setupCliHome(home)
     outputs.push(await publicCli(home))
@@ -736,18 +633,11 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: the CLI says nothing in Japanese a
     outputs.push(status, history)
     expect([status.code, status.stderr, history.code, history.stderr]).toEqual([0, '', 0, ''])
     expect(status.stdout.split('\n').length).toBeGreaterThan(10)
-    for (const id of ['a00001', 'a00002', 'a00003', 'a00004', 'a00005', 'a00006', 'a00007', 'a00008', 'a00009', 'a0000a', 'a0000b', 'a0000c']) expect(history.stdout).toContain(id)
-    const incidentCodes: (number | null)[] = []
-    for (const suffix of ['a00006', 'a00007', 'a00008', 'a00009', 'a0000a', 'a0000b', 'a0000c', 'a00004']) {
-      const shown = await publicCli(home, 'incident', suffix)
-      incidentCodes.push(shown.code)
-      outputs.push(shown)
-    }
-    expect(incidentCodes).toEqual([0, 0, 0, 0, 0, 0, 0, 1])
+    for (const id of ['a00001', 'a00002', 'a00003', 'a00004', 'a00005', 'a00006']) expect(history.stdout).toContain(id)
     const { config } = setupCliHome(home)
     writeFileSync(configPath(home), JSON.stringify({ ...config, version: 2 }))
     outputs.push(await publicCli(home, 'validate'))
-    expect(outputs.length).toBeGreaterThanOrEqual(13)
+    expect(outputs.length).toBeGreaterThanOrEqual(5)
     expect(outputs.flatMap(japaneseLines)).toEqual([])
   })
 
@@ -789,5 +679,22 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: the CLI says nothing in Japanese a
     expect((await publicCli(home, 'validate')).code).toBe(0)
     writeFileSync(configPath(home), JSON.stringify({ ...config, version: 2 }))
     expect((await publicCli(home, 'validate')).code).toBe(1)
+  })
+})
+
+describe('incident removal: I10', () => {
+  it('K10-1: usage contains exactly the eleven supported commands', async () => {
+    const result = await orcapod()
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe('')
+    expect([...result.stderr.matchAll(/^ {2}orcapod (\w+)/gm)].map((match) => match[1])).toEqual(['config', 'validate', 'doctor', 'status', 'up', 'start', 'run', 'stop', 'rerun', 'logs', 'monitor'])
+  })
+
+  it('K10-2: the removed incident command is unknown and exits nonzero with usage', async () => {
+    const result = await orcapod('incident', '3f9a1c')
+    expect(result.code).toBe(1)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toBe((await orcapod('unknown')).stderr)
+    expect(result.stderr).toContain('Usage:')
   })
 })

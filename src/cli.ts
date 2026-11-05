@@ -1,8 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { parseArgs } from 'node:util'
-import { checkProposal } from './approval.ts'
-import { formatIncident } from './incident-contract.ts'
 import { checkProjectPaths, loadConfig } from './config.ts'
 import { formatConfig } from './config-view.ts'
 import { start } from './daemon.ts'
@@ -34,9 +32,6 @@ const COMMANDS = new Map<string, Command>([
   ['run', { usage: 'orcapod run --project <name> (--issue <n> | --pr <n>) --kind <id> [--ai claude|codex] [--now]', run: requestRun }],
   ['stop', { usage: 'orcapod stop [<run.id>]', run: stop }],
   ['rerun', { usage: 'orcapod rerun <run.id>', run: (args) => requestForRun('rerun', args) }],
-  ['incident', { usage: 'orcapod incident <run.id>', run: showIncident }],
-  ['investigate', { usage: 'orcapod investigate <run.id> [--evidence <text>]', run: investigate }],
-  ['approve', { usage: 'orcapod approve <run.id> <revision>', run: approve }],
   ['logs', { usage: 'orcapod logs [-f]', run: showLogs }],
   ['monitor', { usage: MONITOR_USAGE, run: monitor }],
 ])
@@ -163,56 +158,8 @@ async function requestForRun(type: 'stop' | 'rerun', args: string[]): Promise<nu
   const home = orcapodHome()
   const resolved = resolveRunId(loadState(home).runs, positionals[0])
   if (!resolved.ok) return reportErrors([resolved.error])
-  if (type === 'rerun' && loadState(home).runs.find((run) => run.id === resolved.id)?.recovery !== undefined) return reportErrors(['an incident run cannot be rerun. Check the original run with orcapod incident'])
   const file = writeRequest(home, { type, runId: resolved.id })
   console.log(`request placed: ${file} (${type} ${resolved.id})`)
-  warnIfDaemonStopped(home)
-  return 0
-}
-
-function incidentRun(query: string) {
-  const state = loadState(orcapodHome())
-  const resolved = resolveRunId(state.runs, query)
-  if (!resolved.ok) throw new Error(resolved.error)
-  const run = state.runs.find((candidate) => candidate.id === resolved.id)!
-  if (run.recovery !== undefined || run.phase.kind !== 'failed') throw new Error('give the original failed run')
-  return run
-}
-
-async function showIncident(args: string[]): Promise<number> {
-  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true })
-  if (positionals.length !== 1) throw new Error('give exactly one original run ID')
-  console.log(formatIncident(incidentRun(positionals[0])))
-  return 0
-}
-
-async function investigate(args: string[]): Promise<number> {
-  const { positionals, values } = parseArgs({ args, options: { evidence: { type: 'string', default: '' } }, allowPositionals: true })
-  if (positionals.length !== 1) throw new Error('give exactly one original run ID')
-  const run = incidentRun(positionals[0])
-  if (run.incident !== undefined && !['blocked', 'awaiting_approval'].includes(run.incident.status)) throw new Error('cannot start an investigation for an incident that is under investigation, being applied or resolved')
-  const evidence = values.evidence.trim()
-  if (evidence.length > 16_000) throw new Error('added evidence must be 16000 characters or fewer')
-  if (run.incident?.tasks.length && (evidence === '' || run.incident.evidence.includes(evidence))) throw new Error('a new investigation needs added evidence different from the previous one')
-  const home = orcapodHome()
-  const file = writeRequest(home, { type: 'investigate', runId: run.id, evidence })
-  console.log(`investigation request placed: ${file} (the original work is not rerun)`)
-  warnIfDaemonStopped(home)
-  return 0
-}
-
-async function approve(args: string[]): Promise<number> {
-  const { positionals } = parseArgs({ args, options: {}, allowPositionals: true })
-  if (positionals.length !== 2) throw new Error('give the original run ID and the revision shown by orcapod incident')
-  const run = incidentRun(positionals[0])
-  const proposal = run.incident?.proposal
-  if (run.incident?.status !== 'awaiting_approval' || proposal?.revision !== positionals[1]) throw new Error('does not match the revision awaiting approval')
-  const home = orcapodHome()
-  const loaded = loadConfig(home, { ghAccounts: await listGhAccounts() })
-  if (!loaded.ok) return reportErrors(loaded.errors)
-  checkProposal(proposal!, loaded.config, run)
-  const file = writeRequest(home, { type: 'approve', runId: run.id, revision: positionals[1] })
-  console.log(`approval request placed: ${file} (${positionals[1]})`)
   warnIfDaemonStopped(home)
   return 0
 }
