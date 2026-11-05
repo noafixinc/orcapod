@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - Monitor lists omit completion and failure summaries; the full result remains available in the run detail view.
-- Widened the monitor title column to 32 display columns (20 on narrow terminals) to show longer task names.
+- Widened the monitor title column to 26 display columns (20 on narrow terminals) to show longer task names.
 - Failed runs appear in the monitor's Attention only while their Orca tab remains open.
 - Removed the `Unresolved` section from `status`. `status --json` no longer includes `incident`, `recovery` or `recoveryResult`; unfinished investigation and application child runs are loaded as failed.
 - Prompt closing instructions require failed summaries to include the reason and a concrete next action for a human.
