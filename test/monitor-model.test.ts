@@ -474,7 +474,7 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     ])
   })
 
-  it('recent results include closed failed runs, and the history lists everything', () => {
+  it('recent and history omit quoted completion summaries while keeping times and open-tab notes', () => {
     const model = modelOf(stateWith({
       runs: [
         runWith({ id: 'r-aaaaa1', phase: { kind: 'aborted', at: secondsBefore(1200), reason: 'orcapod stop' } }),
@@ -484,10 +484,11 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
       ],
     }))
     expect(rowsOf(model, 'recent').map((row) => cellsOf(row).phase)).toEqual([
-      'done 10-23 09:55 "created PR #130" (tab remains)',
+      'done 10-23 09:55 (tab remains)',
       'failed 10-23 09:50 (result.json is invalid)',
       'aborted 10-23 09:40 (orcapod stop)',
     ])
+    expect(model.history.flatMap((row) => row.cells).some((cell) => cell.text.includes('created PR #130'))).toBe(false)
     expect(model.history.map((row) => row.ref)).toEqual([
       { kind: 'run', runId: 'r-aaaaa4' },
       { kind: 'run', runId: 'r-aaaaa2' },

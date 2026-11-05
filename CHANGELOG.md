@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Monitor lists omit quoted completion summaries; the full result remains available in the run detail view.
 - Failed runs appear in the monitor's Attention only while their Orca tab remains open.
 - Removed the `Unresolved` section from `status`. `status --json` no longer includes `incident`, `recovery` or `recoveryResult`; unfinished investigation and application child runs are loaded as failed.
 - Prompt closing instructions require failed summaries to include the reason and a concrete next action for a human.

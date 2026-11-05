@@ -204,7 +204,7 @@ function runRow(run: Run, now: string, note: string | null): Row {
     { column: 'id', text: shortRunId(run.id) },
     { column: 'project', text: run.project },
     { column: 'title', text: runTitle(run) },
-    { column: 'phase', text: phaseText(run.phase) },
+    { column: 'phase', text: run.phase.kind === 'done' ? `done ${clock(run.phase.at)}${run.phase.tabClosed ? '' : ' (tab remains)'}` : phaseText(run.phase) },
     ...(since === null ? [] : [{ column: 'elapsed' as const, text: duration(Date.parse(now) - Date.parse(since)) }]),
     ...(notes.length === 0 ? [] : [{ column: 'note' as const, text: notes.join(' / ') }]),
     ...(isActive(run) ? [{ column: 'lastMessage' as const, text: `last: ${lastMessageOf(run)}` }] : []),
