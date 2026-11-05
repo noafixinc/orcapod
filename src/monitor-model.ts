@@ -199,12 +199,14 @@ function noticeRow(key: string, subject: string, title: string, note: string): R
 
 function runRow(run: Run, now: string, note: string | null): Row {
   const since = sinceOf(run)
+  const phase = run.phase
+  const phaseLabel = phase.kind === 'done' || phase.kind === 'failed' ? `${phase.kind} ${clock(phase.at)}${phase.tabClosed ? '' : ' (tab remains)'}` : phaseText(phase)
   const notes = [note, run.manual ? 'manual' : null, run.bypassLimit ? '--now' : null].filter((text) => text !== null)
   const cells: Cell[] = [
     { column: 'id', text: shortRunId(run.id) },
     { column: 'project', text: run.project },
     { column: 'title', text: runTitle(run) },
-    { column: 'phase', text: run.phase.kind === 'done' ? `done ${clock(run.phase.at)}${run.phase.tabClosed ? '' : ' (tab remains)'}` : phaseText(run.phase) },
+    { column: 'phase', text: phaseLabel },
     ...(since === null ? [] : [{ column: 'elapsed' as const, text: duration(Date.parse(now) - Date.parse(since)) }]),
     ...(notes.length === 0 ? [] : [{ column: 'note' as const, text: notes.join(' / ') }]),
     ...(isActive(run) ? [{ column: 'lastMessage' as const, text: `last: ${lastMessageOf(run)}` }] : []),

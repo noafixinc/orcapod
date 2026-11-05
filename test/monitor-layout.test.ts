@@ -176,7 +176,7 @@ describe('renderScreen: width and height', () => {
   it('A23: at 126×40, a running row lays out the last response containing ZWJ emoji sequences, combining characters, half-width katakana, kanji and ESC with only ESC replaced by a space, matching the literal column counts', () => {
     const model = modelOf(stateWith({ runs: [runWith({ id: '20261023-0001-aaaaaa', lastMessage: '👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57\u001b[31m' })] }), 1)
     const row = texts(renderScreen(model, initialUi(model), LARGE, [], null)).find((line) => line.includes('last:'))
-    expect(row).toBe(`│   aaaaaa  todos      #123 Feature         running/working 24m last: 👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57 [31m${' '.repeat(38)}│`)
+    expect(row).toBe(`│   aaaaaa  todos      #123 Feature                     running/working 24m last: 👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57 [31m${' '.repeat(26)}│`)
   })
 
   it('A25: exactly 80×24 gives all 24 rows at width 80', () => {
@@ -314,10 +314,10 @@ describe('renderScreen: tier layout of the standard screen', () => {
     expect(lines).toEqual([
       ` orcapod monitor  daemon: running pid 4242 (updated 3s ago)  Orca 1.4.217  GitH…`,
       `┌ Attention 1 ${'─'.repeat(65)}┐`,
-      '│ ! 7a44f0  todos      #119 Feature   failed 10-23 09:55… → orcapod stop 7a44f0│',
+      '│ ! 7a44f0  todos      #119 Feature         failed 10-23… → orcapod stop 7a44f0│',
       `│${' '.repeat(78)}│`,
       `├ Running 1 (todos 1/2) ${'─'.repeat(55)}┤`,
-      `│   3f9a1c  todos      #123 Feature   running/working 24m${' '.repeat(22)}│`,
+      `│   3f9a1c  todos      #123 Feature         running/working 24m${' '.repeat(16)}│`,
       `│${' '.repeat(78)}│`,
       `├ Pending / queue 0 ${'─'.repeat(59)}┤`,
       `│${' '.repeat(78)}│`,
@@ -407,7 +407,7 @@ describe('renderScreen: tier layout of the standard screen', () => {
       expect(ui.selected).toEqual({ kind: 'notice', key: 'project-error:project49' })
       expect(ui.scroll).toBe(showLog ? 45 : 39)
       const last = texts(renderScreen(model, ui, SMALL, LOG, null))
-      expect(last.filter((line) => line.includes('project49'))).toEqual([`│ ! -       project49  watch error    HTTP 502 (since 1m ago)${' '.repeat(4)}→ orcapod logs│`])
+      expect(last.filter((line) => line.includes('project49'))).toEqual(['│ ! -       project49  watch error          HTTP 502 (since 1m … → orcapod logs│'])
       expect(press(ui, ['down'], model, SMALL)).toEqual(ui)
       const backToTop = press(ui, Array.from({ length: 49 }, () => 'up' as const), model, SMALL)
       expect([backToTop.selected, backToTop.scroll]).toEqual([{ kind: 'notice', key: 'project-error:project0' }, 0])
@@ -703,10 +703,9 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: every row of every view is the ter
     expectEveryViewFullScreen(modelOf(shapedState(counts), 4))
   })
 
-  it('A4-2: a 30-character English kind name, a 20-character project name and a last message with full-width, emoji, combining characters and ESC keep every row at the terminal width', () => {
-    const kindName = 'Dependency Update Automation!!'
+  it.each(['Dependency Update Automation!!', '\u627f\u8a8d\u6e08\u307f\u4fee\u6b63\u306e\u9069\u7528'])('A4-2: kind name %s, a 20-character project name and a last message with full-width, emoji, combining characters and ESC keep every row at the terminal width', (kindName) => {
     const projectName = 'verylongprojectname1'
-    expect([kindName.length, projectName.length]).toEqual([30, 20])
+    expect(projectName.length).toBe(20)
     const config = configWith(2)
     config.projects[1] = project(projectName)
     config.kinds[0] = { id: 'feature', name: kindName }
@@ -721,6 +720,12 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: every row of every view is the ter
       ],
     })
     const model = buildMonitorModel({ home: HOME, state, stateError: null, stateMtime: secondsBefore(3), daemonPid: 4242, lockError: null, config: { kind: 'running', config, loadedAt: secondsBefore(3600) }, now: NOW })
+    if (kindName === '\u627f\u8a8d\u6e08\u307f\u4fee\u6b63\u306e\u9069\u7528') {
+      const main = texts(renderScreen(model, initialUi(model), LARGE, LOG, null))
+      for (const id of ['aaaaaa', 'bbbbbb', 'cccccc', 'dddddd']) {
+        expect(main.find((line) => line.includes(id))).toContain(`#123 ${kindName}`)
+      }
+    }
     const projectDetail: UiState = { ...initialUi(model), view: { kind: 'detail', ref: { kind: 'project', name: projectName } } }
     const runDetail: UiState = { ...initialUi(model), view: { kind: 'detail', ref: { kind: 'run', runId: '20261023-0001-aaaaaa' } } }
     const views = [...viewsOf(model), { name: 'long project', ui: projectDetail, detail: { kind: 'project', name: projectName, project: project(projectName), error: null } satisfies DetailContent }, { name: 'long run', ui: runDetail, detail: null }]
