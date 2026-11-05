@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util'
 import { checkProposal } from './approval.ts'
 import { formatIncident } from './incident-contract.ts'
 import { checkProjectPaths, loadConfig } from './config.ts'
+import { formatConfig } from './config-view.ts'
 import { start } from './daemon.ts'
 import { formatDoctorLine, runDoctor, systemDoctorDeps } from './doctor.ts'
 import { fetchItem, fetchOpenItems, listGhAccounts } from './github.ts'
@@ -24,6 +25,7 @@ const MONITOR_INTERVAL_SECONDS = { min: 0.2, max: 60, default: '1' }
 const MONITOR_LOG_LINES = { min: 1, max: 10000, default: '200' }
 
 const COMMANDS = new Map<string, Command>([
+  ['config', { usage: 'orcapod config', run: showConfig }],
   ['validate', { usage: 'orcapod validate', run: validate }],
   ['doctor', { usage: 'orcapod doctor [--probe]', run: diagnose }],
   ['status', { usage: 'orcapod status [--json] [--history]', run: showStatus }],
@@ -38,6 +40,15 @@ const COMMANDS = new Map<string, Command>([
   ['logs', { usage: 'orcapod logs [-f]', run: showLogs }],
   ['monitor', { usage: MONITOR_USAGE, run: monitor }],
 ])
+
+async function showConfig(args: string[]): Promise<number> {
+  parseArgs({ args, options: {}, allowPositionals: false })
+  const home = orcapodHome()
+  const loaded = loadConfig(home, { ghAccounts: 'unchecked' })
+  if (!loaded.ok) return reportErrors(loaded.errors)
+  console.log(formatConfig(loaded.config, home))
+  return 0
+}
 
 async function validate(args: string[]): Promise<number> {
   parseArgs({ args, options: {}, allowPositionals: false })

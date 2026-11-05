@@ -33,6 +33,7 @@
     "stop": "node bin/orcapod.js stop",
     "monitor": "node bin/orcapod.js monitor",
     "status": "node bin/orcapod.js status",
+    "config": "node bin/orcapod.js config",
     "logs": "node bin/orcapod.js logs -f",
     "validate": "node bin/orcapod.js validate",
     "doctor": "node bin/orcapod.js doctor",

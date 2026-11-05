@@ -43,10 +43,13 @@ cd orcapod
 | `make stop` | 常駐を停止する（個別の AI・タブは継続） |
 | `make monitor` | 監視画面だけを開く |
 | `make status` | 状態を 1 回表示する |
+| `make config` | デフォルト値・無効なプロジェクトやルールも含め、設定をテーブル表示する |
 | `make logs` | ログを追跡する |
 | `make validate` | 設定を検証する |
 | `make doctor` | 実行環境を診断する |
 | `make check` | 型チェック・Lint・全テストを実行する |
+
+`make config` は `ORCAPOD_HOME`（未指定時はリポジトリルート）の `config.yaml` と `prompts/` を読み、全体設定・作業種別・プロジェクト情報・監視ルール・プロンプトのパスを表示します。GitHub へのアクセスや常駐の起動は不要です。ディスク上の設定を表示するため、常駐が最後に正常読込した設定とは異なる場合があります。GitHub アカウントやプロジェクトのパスも検証するには `make validate` を使ってください。
 
 監視画面の `q` / Ctrl-C は画面だけを閉じます。設定は自動で再読込されますが、コード更新後は常駐を再起動してください。コマンド一覧は `make`、CLI の使い方は `node bin/orcapod.js` で表示できます。
 

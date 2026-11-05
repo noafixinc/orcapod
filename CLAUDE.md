@@ -20,7 +20,7 @@ pnpm test test/tick.test.ts   # one file. `pnpm test -- <file>` passes `--` to v
 node bin/orcapod.js           # prints usage (all commands)
 ```
 
-CLI subcommands: `validate` `doctor [--probe]` `status [--json] [--history]` `up` `start` `stop [<run.id>]` `run` `rerun` `incident` `investigate` `approve` `logs [-f]` `monitor`. `make start` calls `up`, `make daemon` calls `start`; every other `make` target calls the subcommand of the same name.
+CLI subcommands: `config` `validate` `doctor [--probe]` `status [--json] [--history]` `up` `start` `stop [<run.id>]` `run` `rerun` `incident` `investigate` `approve` `logs [-f]` `monitor`. `make start` calls `up`, `make daemon` calls `start`; every other `make` target calls the subcommand of the same name.
 
 Running `monitor` as if on a real terminal needs a screen size (`monitor.ts` uses `stdout.columns ?? 0`, so a non-TTY gets 0×0 and draws nothing):
 
