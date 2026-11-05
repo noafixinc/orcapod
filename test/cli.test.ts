@@ -9,7 +9,7 @@ import { openIncident, proposalRevision } from '../src/incident-contract.ts'
 import { monitorText } from '../src/monitor.ts'
 import { configPath, lockPath, logPath, promptsDir, stateDir, statePath } from '../src/paths.ts'
 import { loadState, readRequests, saveState } from '../src/state.ts'
-import { cliProcess, collect, execCalls, publicCli, setupCliHome, STOPPED_WARNING, writeFixture } from './helpers/cli-process.ts'
+import { cliEnv, cliProcess, collect, execCalls, publicCli, setupCliHome, STOPPED_WARNING, writeFixture } from './helpers/cli-process.ts'
 import { JAPANESE } from './helpers/japanese.ts'
 import type { Run, State } from '../src/types.ts'
 
@@ -73,6 +73,44 @@ const state: State = {
   configStatus: null,
   daemonInfo: null,
 }
+
+describe('showing configuration', () => {
+  it('make config displays the selected home with defaults without invoking external commands or creating state', async () => {
+    const { fixture } = setupCliHome(home)
+    writeFixture(home, { ...fixture, ghError: true })
+    const result = await promisify(execFile)('make', ['config', `NODE=${process.execPath}`], {
+      cwd: join(import.meta.dirname, '..'), env: cliEnv(home),
+    })
+    expect(result.stderr).toBe('')
+    expect(result.stdout).toContain(`Config: ${configPath(home)}`)
+    expect(result.stdout).toMatch(/\| maxConcurrentPerProject\s+\| 2\s+\|/)
+    expect(result.stdout).toMatch(/\| notify.desktop\s+\| false\s+\|/)
+    expect(result.stdout).toMatch(/\| authors\s+\| OWNER, MEMBER, COLLABORATOR\s+\|/)
+    expect(result.stdout).toContain('Project: todos')
+    expect(result.stdout).toMatch(/\| issue\s+\| impl\s+\| feature\s+\| claude\s+\| each\s+\| 5\s+\| true\s+\| skip\s+\| inherit\s+\|/)
+    expect(execCalls(home)).toEqual([{ pid: expect.any(Number), type: 'process', args: ['config'] }])
+    expect(existsSync(stateDir(home))).toBe(false)
+  })
+
+  it.each(['missing', 'invalid'])('rejects a %s configuration without printing a partial table', async (kind) => {
+    writeFixture(home, {})
+    if (kind === 'invalid') writeFileSync(configPath(home), 'version: [')
+    const result = await publicCli(home, 'config')
+    expect([result.code, result.signal, result.stdout]).toEqual([1, null, ''])
+    expect(result.stderr).toContain('config.yaml:')
+    expect(execCalls(home)).toEqual([{ pid: expect.any(Number), type: 'process', args: ['config'] }])
+    expect(existsSync(stateDir(home))).toBe(false)
+  })
+
+  it.each(['extra', '--unknown'])('rejects an unexpected argument %s before loading configuration', async (arg) => {
+    writeFixture(home, {})
+    const result = await publicCli(home, 'config', arg)
+    expect([result.code, result.signal, result.stdout]).toEqual([1, null, ''])
+    expect(result.stderr).toContain('Usage: orcapod config')
+    expect(result.stderr).not.toContain('config.yaml:')
+    expect(execCalls(home)).toEqual([{ pid: expect.any(Number), type: 'process', args: ['config', arg] }])
+  })
+})
 
 describe('stopping the daemon', () => {
   it('even with repeated make stop, the real daemon completes its cycle, saves state, and releases the lock', async () => {
@@ -554,7 +592,7 @@ describe('G1: public CLI normal path, external dependencies, arguments, and outp
     const result = await publicCli(home, ...args)
     expect([result.code, result.signal, result.stdout]).toEqual([1, null, ''])
     expect(result.stderr.startsWith('Usage:\n')).toBe(true)
-    for (const command of ['validate', 'doctor', 'status', 'up', 'start', 'run', 'stop', 'rerun', 'incident', 'investigate', 'approve', 'logs', 'monitor']) expect(result.stderr).toContain(`  orcapod ${command}`)
+    for (const command of ['config', 'validate', 'doctor', 'status', 'up', 'start', 'run', 'stop', 'rerun', 'incident', 'investigate', 'approve', 'logs', 'monitor']) expect(result.stderr).toContain(`  orcapod ${command}`)
   })
 
   it('status warns about a gh read failure and continues showing the saved state', async () => {

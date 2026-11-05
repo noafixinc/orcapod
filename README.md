@@ -13,6 +13,7 @@ orcapod is a resident CLI for macOS. It polls GitHub for open issues and pull re
 ```
 $ node bin/orcapod.js
 Usage:
+  orcapod config
   orcapod validate
   orcapod doctor [--probe]
   orcapod status [--json] [--history]
@@ -77,10 +78,13 @@ Everyday operations are `make` targets that call `node bin/orcapod.js`:
 | `make stop` | Stop the daemon; running AI tabs keep going |
 | `make monitor` | Open the monitor only |
 | `make status` | Print the state once |
+| `make config` | Print the configuration as tables, including defaults and disabled projects/rules |
 | `make logs` | Follow the log |
 | `make validate` | Check the configuration |
 | `make doctor` | Diagnose the environment |
 | `make check` | Typecheck, lint and run all tests |
+
+`make config` reads `config.yaml` and `prompts/` from `ORCAPOD_HOME` (or the repository root when unset). It shows the settings, kinds, project details, rules and prompt file paths without contacting GitHub or starting the daemon. It displays the configuration on disk, which may differ from the daemon's last successfully loaded configuration. Use `make validate` to also check GitHub accounts and project paths.
 
 Start a run by hand, bypassing the label rules and the delay:
 

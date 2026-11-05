@@ -3,7 +3,7 @@ PNPM ?= pnpm
 ORCAPOD = $(NODE) bin/orcapod.js
 
 .DEFAULT_GOAL := help
-.PHONY: help start daemon stop monitor status validate doctor logs check typecheck lint test
+.PHONY: help start daemon stop monitor status config validate doctor logs check typecheck lint test
 
 help:
 	@printf '%s\n' \
@@ -12,6 +12,7 @@ help:
 		'make stop      Ask the daemon to stop' \
 		'make monitor   Open the monitor (q to quit)' \
 		'make status    Print the status once' \
+		'make config    Print the configuration as tables' \
 		'make validate  Validate the configuration' \
 		'make doctor    Diagnose the environment' \
 		'make logs      Follow the log (Ctrl-C to stop)' \
@@ -34,6 +35,9 @@ monitor:
 
 status:
 	$(ORCAPOD) status
+
+config:
+	$(ORCAPOD) config
 
 validate:
 	$(ORCAPOD) validate
