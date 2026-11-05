@@ -319,6 +319,7 @@ describe('buildMonitorModel: attention', () => {
     expect(sectionsHolding(model, left.id)).toEqual(['attention'])
     expect(sectionsHolding(model, closed.id)).toEqual(['recent'])
     expect(rowsOf(model, 'attention').map((row) => row.hint)).toEqual(['→ orcapod stop 7a44f0'])
+    expect(cellsOf(rowsOf(model, 'attention')[0]).phase).toBe('failed 10-23 09:55 (tab remains)')
     expect(titleOf(model, 'attention')).toBe('Attention 1')
   })
 
@@ -474,7 +475,7 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     ])
   })
 
-  it('recent and history omit quoted completion summaries while keeping times and open-tab notes', () => {
+  it('recent and history omit completion and failure summaries while keeping times and open-tab notes', () => {
     const model = modelOf(stateWith({
       runs: [
         runWith({ id: 'r-aaaaa1', phase: { kind: 'aborted', at: secondsBefore(1200), reason: 'orcapod stop' } }),
@@ -485,10 +486,10 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     }))
     expect(rowsOf(model, 'recent').map((row) => cellsOf(row).phase)).toEqual([
       'done 10-23 09:55 (tab remains)',
-      'failed 10-23 09:50 (result.json is invalid)',
+      'failed 10-23 09:50',
       'aborted 10-23 09:40 (orcapod stop)',
     ])
-    expect(model.history.flatMap((row) => row.cells).some((cell) => cell.text.includes('created PR #130'))).toBe(false)
+    expect(model.history.flatMap((row) => row.cells).some((cell) => ['created PR #130', 'result.json is invalid', 'launch failed: spawn error'].some((summary) => cell.text.includes(summary)))).toBe(false)
     expect(model.history.map((row) => row.ref)).toEqual([
       { kind: 'run', runId: 'r-aaaaa4' },
       { kind: 'run', runId: 'r-aaaaa2' },
