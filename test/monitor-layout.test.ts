@@ -176,7 +176,7 @@ describe('renderScreen: width and height', () => {
   it('A23: at 126×40, a running row lays out the last response containing ZWJ emoji sequences, combining characters, half-width katakana, kanji and ESC with only ESC replaced by a space, matching the literal column counts', () => {
     const model = modelOf(stateWith({ runs: [runWith({ id: '20261023-0001-aaaaaa', lastMessage: '👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57\u001b[31m' })] }), 1)
     const row = texts(renderScreen(model, initialUi(model), LARGE, [], null)).find((line) => line.includes('last:'))
-    expect(row).toBe(`│   aaaaaa  todos      #123 Feature                     running/working 24m last: 👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57 [31m${' '.repeat(26)}│`)
+    expect(row).toBe(`│   aaaaaa  todos      #123 Feature               running/working 24m last: 👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57 [31m${' '.repeat(32)}│`)
   })
 
   it('A25: exactly 80×24 gives all 24 rows at width 80', () => {
@@ -703,8 +703,9 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: every row of every view is the ter
     expectEveryViewFullScreen(modelOf(shapedState(counts), 4))
   })
 
-  it.each(['Dependency Update Automation!!', '\u627f\u8a8d\u6e08\u307f\u4fee\u6b63\u306e\u9069\u7528'])('A4-2: kind name %s, a 20-character project name and a last message with full-width, emoji, combining characters and ESC keep every row at the terminal width', (kindName) => {
+  it.each(['Dependency Update Automation!!', 'Incident investigation', '\u627f\u8a8d\u6e08\u307f\u4fee\u6b63\u306e\u9069\u7528'])('A4-2: kind name %s, a 20-character project name and a last message with full-width, emoji, combining characters and ESC keep every row at the terminal width', (kindName) => {
     const projectName = 'verylongprojectname1'
+    const rule: Run['rule'] = { ...runWith({}).rule, batch: kindName === 'Incident investigation' ? 'together' : 'each' }
     expect(projectName.length).toBe(20)
     const config = configWith(2)
     config.projects[1] = project(projectName)
@@ -713,17 +714,17 @@ describe('SPEC-ENGLISH-OUTPUT-001 conditions: every row of every view is the ter
     const target = { path: `/Users/me/git/${projectName}`, repo: `taylor/${projectName}`, githubAccount: 'taylor' }
     const state = stateWith({
       runs: [
-        runWith({ id: '20261023-0001-aaaaaa', kindName, project: projectName, target, lastMessage: message }),
-        runWith({ id: '20261023-0002-bbbbbb', kindName, lastMessage: message, phase: { kind: 'failed', at: secondsBefore(60), reason: message, tabClosed: false } }),
-        runWith({ id: '20261023-0003-cccccc', kindName, project: projectName, target, startedAt: null, phase: { kind: 'queued', since: secondsBefore(60) } }),
-        runWith({ id: '20261023-0004-dddddd', kindName, phase: { kind: 'done', at: secondsBefore(900), summary: message, tabClosed: true } }),
+        runWith({ id: '20261023-0001-aaaaaa', kindName, rule, project: projectName, target, lastMessage: message }),
+        runWith({ id: '20261023-0002-bbbbbb', kindName, rule, lastMessage: message, phase: { kind: 'failed', at: secondsBefore(60), reason: message, tabClosed: false } }),
+        runWith({ id: '20261023-0003-cccccc', kindName, rule, project: projectName, target, startedAt: null, phase: { kind: 'queued', since: secondsBefore(60) } }),
+        runWith({ id: '20261023-0004-dddddd', kindName, rule, phase: { kind: 'done', at: secondsBefore(900), summary: message, tabClosed: true } }),
       ],
     })
     const model = buildMonitorModel({ home: HOME, state, stateError: null, stateMtime: secondsBefore(3), daemonPid: 4242, lockError: null, config: { kind: 'running', config, loadedAt: secondsBefore(3600) }, now: NOW })
-    if (kindName === '\u627f\u8a8d\u6e08\u307f\u4fee\u6b63\u306e\u9069\u7528') {
+    if (kindName !== 'Dependency Update Automation!!') {
       const main = texts(renderScreen(model, initialUi(model), LARGE, LOG, null))
       for (const id of ['aaaaaa', 'bbbbbb', 'cccccc', 'dddddd']) {
-        expect(main.find((line) => line.includes(id))).toContain(`#123 ${kindName}`)
+        expect(main.find((line) => line.includes(id))).toContain(kindName === 'Incident investigation' ? `${kindName} ×1` : `#123 ${kindName}`)
       }
     }
     const projectDetail: UiState = { ...initialUi(model), view: { kind: 'detail', ref: { kind: 'project', name: projectName } } }
