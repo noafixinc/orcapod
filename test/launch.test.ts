@@ -222,19 +222,3 @@ describe('running launch.sh (C29)', () => {
     expect(readFileSync(marker, 'utf8').split('\0').slice(0, -2)).toEqual(['--model', 'model with spaces', '--no-daemon', ...(option ? ['--'] : [])])
   })
 })
-
-describe('incident recovery launch', () => {
-  it('passes the failure evidence and the pre-approval scope instead of the normal original prompt', () => {
-    const run = runAt('/repo', { recovery: { sourceRunId: '20261023-0800-abcdef', stage: 'prepare', evidence: ['database name mismatch'] }, kindName: 'Incident investigation' })
-    const config = configWith('claude')
-    config.prompts.clear()
-    const prepared = prepareRun(home, run, config)
-    const prompt = readFileSync(join(home, 'runs', run.id, 'prompt.md'), 'utf8')
-    expect(prepared.title).toBe('Incident investigation abcdef')
-    expect(prompt).toContain('It is not a rerun of the original work')
-    expect(prompt).toContain('push, pull request creation, merge, messaging other people, expanding database privileges and production operations are forbidden')
-    expect(prompt).toContain('database name mismatch')
-    expect(prompt).toContain('"proposal"')
-    expect(prompt).not.toContain('Implement issue #123 "Inventory list"')
-  })
-})

@@ -20,7 +20,7 @@ pnpm test test/tick.test.ts   # one file. `pnpm test -- <file>` passes `--` to v
 node bin/orcapod.js           # prints usage (all commands)
 ```
 
-CLI subcommands: `config` `validate` `doctor [--probe]` `status [--json] [--history]` `up` `start` `stop [<run.id>]` `run` `rerun` `incident` `investigate` `approve` `logs [-f]` `monitor`. `make start` calls `up`, `make daemon` calls `start`; every other `make` target calls the subcommand of the same name.
+CLI subcommands: `config` `validate` `doctor [--probe]` `status [--json] [--history]` `up` `start` `stop [<run.id>]` `run` `rerun` `logs [-f]` `monitor`. `make start` calls `up`, `make daemon` calls `start`; every other `make` target calls the subcommand of the same name.
 
 Running `monitor` as if on a real terminal needs a screen size (`monitor.ts` uses `stdout.columns ?? 0`, so a non-TTY gets 0×0 and draws nothing):
 
@@ -47,11 +47,11 @@ The only contact with the outside world is `CycleDeps` (`home, orca, github, ghA
 
 ### State transitions are a pure function (`tick.ts`)
 
-`tick(state, obs)` passes a `structuredClone` of the state through `serve → detect → fire → advanceIncidents → schedule → recover → track → watchOrca` and returns `{ state, effects }`. It does no I/O. Only `applyLaunch` / `applyClose` feed effect results back into the state. To add behaviour, add a step and an `Effect` variant; `daemon.ts` only executes I/O.
+`tick(state, obs)` passes a `structuredClone` of the state through `serve → detect → fire → schedule → recover → track → watchOrca` and returns `{ state, effects }`. It does no I/O. Only `applyLaunch` / `applyClose` feed effect results back into the state. To add behaviour, add a step and an `Effect` variant; `daemon.ts` only executes I/O.
 
 ### Single writer
 
-Only the daemon writes `state/state.json` (one process via `state/daemon.lock`, written to a temporary file and `renameSync`d). The CLI commands `run` / `stop` / `rerun` / `investigate` / `approve` only drop `state/requests/<ISO time>-<hex>.json`; the daemon reads and deletes them on its next cycle. `status` / `monitor` are read-only. `up` forks `start` detached and confirms a successful start through the IPC startup notification (output goes to `logs/daemon.log`).
+Only the daemon writes `state/state.json` (one process via `state/daemon.lock`, written to a temporary file and `renameSync`d). The CLI commands `run` / `stop` / `rerun` only drop `state/requests/<ISO time>-<hex>.json`; the daemon reads and deletes them on its next cycle. `status` / `monitor` are read-only. `up` forks `start` detached and confirms a successful start through the IPC startup notification (output goes to `logs/daemon.log`).
 
 ### Adapters
 
@@ -75,13 +75,9 @@ The `RunPhase` union is the state machine: `queued → launching → starting �
 - Save the state in `launching` before calling `terminal create`. If the result of create is unknown, mark `launchUncertain` and wait for `pane.json`; if it does not appear within 5 minutes (`LAUNCH_RECOVERY_MS`), mark failed and do not relaunch (avoids double execution)
 - Completion is decided only from `result.json` (`{"status":"done"|"failed","summary":"…","links":[…]}`); Orca's agent state `done` is not a completion signal. `terminal close` is issued only when a `done` result exists and an agent `done` that started after the mtime of `result.json` has been observed
 - Only `ptyKilled: true` counts as a successful close; after `MAX_CLOSE_ATTEMPTS` (3) failures the tab is left open and the run becomes done
-- `status: failed`, and broken JSON that is not repaired within 60 seconds (`INVALID_RESULT_GRACE_MS`), are failed. Failed tabs are not closed
+- `status: failed`, and broken JSON that is not repaired within 60 seconds (`INVALID_RESULT_GRACE_MS`), are failed. Failed tabs are not closed. A failed run stays in the monitor's Attention while its tab is open and moves to Recent once the tab is closed
 - `starting` for 90 seconds notifies once about the launch wait (with the tail of the screen). If both the pane and the tab disappear from a complete listing, the run is aborted. An incomplete `terminal list` is never treated as disappearance
 - Notifications are once per run × event (`notified`). Thresholds for waiting for input, missing result and long runs are in `settings.notify`
-
-### Failure-path problem solving (`incidents.ts` / `incident-contract.ts` / `approval.ts`)
-
-A failed run gets an `incident`. `investigate` launches a child run with `recovery.stage: 'prepare'`, and `approve <revision>` a child run with `'apply'`, under the same rule. Children do not recurse. Investigations are limited to `MAX_INVESTIGATIONS` (3), and a re-investigation needs evidence different from the previous one. `revision` is the sha256 of the whole proposal; at `apply` launch time `checkProposal` re-validates the approval. Whether the same fix / operation proposal is being applied again is decided by `fingerprint` (a hash of the changed files and operations only).
 
 ### Home and prompts
 

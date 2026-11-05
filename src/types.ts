@@ -39,11 +39,7 @@ export interface OrcaClient {
 
 export interface Processed { key: string; seenAt: string }
 export interface Pending { ruleKey: string; project: string; items: Item[]; fireAt: string }
-export interface Proposal { summary: string; cause: string; evidence: string[]; changes: { path: string; head: string; summary: string }[]; validation: string[]; actions: string[]; risks: string[] }
-export interface ProposalSnapshot { revision: string; body: Proposal }
-export interface Incident { status: 'pending' | 'investigating' | 'awaiting_approval' | 'applying' | 'blocked' | 'resolved'; reason: string; updatedAt: string; tasks: string[]; evidence: string[]; revisions: string[]; proposal?: ProposalSnapshot; approvedRevision?: string }
-export interface RecoveryTask { sourceRunId: string; stage: 'prepare' | 'apply'; evidence: string[]; proposal?: ProposalSnapshot }
-export type ResultFile = { status: 'done' | 'failed'; summary: string; links: string[]; proposal?: Proposal; verification?: string[] }
+export type ResultFile = { status: 'done' | 'failed'; summary: string; links: string[] }
 export interface ProjectSnapshot { path: string; repo: string; githubAccount: string }
 export type RunPhase =
   | { kind: 'queued'; since: string }
@@ -53,11 +49,11 @@ export type RunPhase =
   | { kind: 'done'; at: string; summary: string; tabClosed: boolean }
   | { kind: 'failed'; at: string; reason: string; tabClosed: boolean; launchFailed?: true }
   | { kind: 'aborted'; at: string; reason: string }
-export interface Run { paneRecoveredAt?: string; launchUncertain?: boolean; incident?: Incident; recovery?: RecoveryTask; recoveryResult?: ResultFile; id: string; project: string; target: ProjectSnapshot; rule: Rule; kindName: string; items: Item[]; createdAt: string; startedAt: string | null; phase: RunPhase; history: { kind: RunPhase['kind']; at: string }[]; orca: OrcaRef | null; notified: string[]; bypassLimit: boolean; manual: boolean; lastMessage: string | null }
+export interface Run { paneRecoveredAt?: string; launchUncertain?: boolean; id: string; project: string; target: ProjectSnapshot; rule: Rule; kindName: string; items: Item[]; createdAt: string; startedAt: string | null; phase: RunPhase; history: { kind: RunPhase['kind']; at: string }[]; orca: OrcaRef | null; notified: string[]; bypassLimit: boolean; manual: boolean; lastMessage: string | null }
 export interface ConfigStatus { loadedAt: string; sha256: string; error: string | null }
 export interface DaemonInfo { pid: number; startedAt: string; lastCycleAt: string; lastCycleError: { at: string; message: string } | null; orcaVersion: string | null; cycleSeconds: number }
 export interface State { version: 1; processed: Processed[]; pending: Pending[]; runs: Run[]; watchedRules: string[]; lastPolledAt: Record<string, string>; projectErrors: Record<string, { since: string; message: string }>; orcaOutageSince: string | null; consumedRequests: string[]; configStatus: ConfigStatus | null; daemonInfo: DaemonInfo | null }
-export type Request = { type: 'run'; project: string; item: Item; kind: string; ai?: Ai; now: boolean } | { type: 'stop'; runId: string } | { type: 'rerun'; runId: string } | { type: 'investigate'; runId: string; evidence: string } | { type: 'approve'; runId: string; revision: string }
+export type Request = { type: 'run'; project: string; item: Item; kind: string; ai?: Ai; now: boolean } | { type: 'stop'; runId: string } | { type: 'rerun'; runId: string }
 export type ReadRequest = { file: string; request: Request } | { file: string; error: string }
 
 export interface Observations {

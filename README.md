@@ -22,9 +22,6 @@ Usage:
   orcapod run --project <name> (--issue <n> | --pr <n>) --kind <id> [--ai claude|codex] [--now]
   orcapod stop [<run.id>]
   orcapod rerun <run.id>
-  orcapod incident <run.id>
-  orcapod investigate <run.id> [--evidence <text>]
-  orcapod approve <run.id> <revision>
   orcapod logs [-f]
   orcapod monitor [--interval <seconds>] [--log-lines <N>]
 ```
@@ -36,7 +33,7 @@ Usage:
 - **Nothing is written to GitHub.** Processed items are tracked locally in `state/state.json` per `(item, label)`; no label is added or removed on GitHub.
 - **Completion by contract, not by guessing.** A run is done or failed only when the AI writes `{"status":"done"|"failed","summary":"…","links":[…]}` to `runs/<id>/result.json`. The closing instructions that tell the AI to do so are appended to every prompt (`src/prompt.ts`).
 - **Safe restarts.** The daemon persists state before every `terminal create`, recovers uncertain launches by waiting for the tab's `pane.json`, and never starts a run twice (`test/launch.test.ts`, `test/daemon.test.ts`).
-- **Incident workflow for failed runs.** `investigate` starts a child run that only diagnoses and proposes a fix; `approve <revision>` applies exactly the proposal you reviewed (`src/incidents.ts`, `src/approval.ts`).
+- **Failed runs stay visible.** A failed run keeps its tab open and stays in the monitor's Attention until you close the tab (`orcapod stop`); the AI's summary says what to do next.
 - **Pure state machine, tested.** `tick(state, observation)` is a pure function with no I/O; the vitest suite in `test/` describes the contract.
 
 Status: experimental; the configuration format and the `result.json` contract may still change. Issues and pull requests are welcome.
@@ -92,24 +89,21 @@ Start a run by hand, bypassing the label rules and the delay:
 node bin/orcapod.js run --project your-project --issue 42 --kind feature --ai claude --now
 ```
 
-Stop one run (this closes its tab), rerun it, or walk through a failed run:
+Stop one run (this closes its tab) or rerun it:
 
 ```sh
 node bin/orcapod.js stop 20261023-0917-3f9a1c
 node bin/orcapod.js rerun 20261023-0917-3f9a1c
-node bin/orcapod.js incident 20261023-0917-3f9a1c
-node bin/orcapod.js investigate 20261023-0917-3f9a1c
-node bin/orcapod.js approve 20261023-0917-3f9a1c <revision>
 ```
 
-Run IDs look like `20261023-0917-3f9a1c` and are shown by `status` and `monitor`. `run`, `stop`, `rerun`, `investigate` and `approve` only drop a request file into `state/requests/`; the daemon picks it up on its next 20-second cycle, so they return immediately.
+Run IDs look like `20261023-0917-3f9a1c` and are shown by `status` and `monitor`. `run`, `stop` and `rerun` only drop a request file into `state/requests/`; the daemon picks it up on its next 20-second cycle, so they return immediately.
 
 ### How a run proceeds
 
 1. GitHub is polled every 60 seconds with `gh api --paginate`. Items that pass the author filter and match a rule are added to that rule's pending set; the fire time is `last match + delayMinutes`.
 2. When the timer expires the run is created (`queued`, then `launching`). Runs above `settings.maxConcurrentPerProject` wait in `queued`.
 3. orcapod writes `runs/<id>/prompt.md` and `runs/<id>/launch.sh`, then asks Orca for a new tab in the project's worktree running `bash launch.sh`. The script records its pane, obtains `GH_TOKEN` through `gh auth token -u <githubAccount>` and starts the AI with the launch command from `settings.launch`. For Codex, `--no-daemon` is added unless already present.
-4. The AI works and finally writes `runs/<id>/result.json`. On `done` orcapod closes the tab; on `failed` it leaves the tab open and attaches an incident.
+4. The AI works and finally writes `runs/<id>/result.json`. On `done` orcapod closes the tab; on `failed` it leaves the tab open and shows the run in Attention until the tab is closed.
 5. If the AI is waiting for input, has produced no result for too long, or the run exceeds `settings.notify.maxRunMinutes`, you get one desktop notification per event.
 
 ## Configuration

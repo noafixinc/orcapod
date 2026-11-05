@@ -1,4 +1,3 @@
-import { incidentLabel, unresolved } from './incident-contract.ts'
 import { ruleKey } from './config.ts'
 import { runTitle } from './launch.ts'
 import { ownValue } from './records.ts'
@@ -162,7 +161,6 @@ function sectionsOf(state: State, config: Config | null, health: DaemonHealth, n
 
 function attentionOf(run: Run): Attention | null {
   const { phase } = run
-  if (unresolved(run)) return { mark: '!', note: incidentLabel(run.incident), since: run.incident?.updatedAt ?? ('at' in phase ? phase.at : run.createdAt), hint: `→ orcapod incident ${shortRunId(run.id)}` }
   if (phase.kind === 'failed' && !phase.tabClosed) return { mark: '!', note: null, since: phase.at, hint: `→ orcapod stop ${shortRunId(run.id)}` }
   if (phase.kind === 'running' && phase.waitingSince !== undefined) return { mark: '?', note: 'waiting for input', since: phase.waitingSince, hint: '→ answer in the Orca tab' }
   if (phase.kind === 'starting' && run.notified.includes('starting-stall')) return { mark: '!', note: 'slow to start', since: run.startedAt ?? phase.since, hint: '→ accept the trust dialog in the Orca tab' }

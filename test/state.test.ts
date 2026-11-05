@@ -2,10 +2,10 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, r
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { openIncident, proposalRevision } from '../src/incident-contract.ts'
+import { buildMonitorModel } from '../src/monitor-model.ts'
 import { lockPath, requestsDir, stateDir, statePath } from '../src/paths.ts'
 import { acquireDaemonLock, consumeRequest, liveDaemonPid, loadState, newRunId, processedKey, readRequests, readStateSnapshot, releaseDaemonLock, saveState, writeRequest } from '../src/state.ts'
-import type { Item, Proposal, Run, State } from '../src/types.ts'
+import type { Item, Run, State } from '../src/types.ts'
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
@@ -121,15 +121,7 @@ describe('loadState', () => {
     lastMessage: null,
   }
 
-  const proposal: Proposal = { summary: 'fix the config', cause: 'the config is stale', evidence: ['a diff exists'], changes: [], validation: ['unit tests pass'], actions: ['apply the fix'], risks: [] }
-  const snapshot = { revision: proposalRevision(proposal), body: proposal }
-  const incident = { ...openIncident(run.createdAt), status: 'applying' as const, proposal: snapshot, approvedRevision: snapshot.revision }
-
   it.each([
-    ['incident', { incident: { ...incident, proposal: { ...snapshot, revision: '0'.repeat(64) } } }],
-    ['recovery', { recovery: { sourceRunId: run.id, stage: 'apply', evidence: [] } }],
-    ['recoveryResult.proposal', { recoveryResult: { status: 'done', summary: 'investigated', links: [], proposal: { ...proposal, actions: [] } } }],
-    ['recoveryResult.verification', { recoveryResult: { status: 'done', summary: 'applied', links: [], verification: 'passed' } }],
     ['paneRecoveredAt', { paneRecoveredAt: 123 }],
     ['launchUncertain', { launchUncertain: 'true' }],
   ])('G4: loadState and snapshot reject an invalid %s and keep the original JSON', (field, overrides) => {
@@ -141,23 +133,77 @@ describe('loadState', () => {
     expect(readFileSync(statePath(home), 'utf8')).toBe(original)
   })
 
-  it('G4: restores a valid incident/recovery/recoveryResult and the recovery flags without loss or alteration', () => {
-    const childId = '20261023-0017-bbbbbb'
-    const full: State = {
-      ...savedState,
-      runs: [
-        { ...run, phase: { kind: 'failed', at: run.createdAt, reason: 'config error', tabClosed: true }, incident: { ...incident, tasks: [childId] } },
-        { ...run, id: childId, phase: { kind: 'done', at: run.createdAt, summary: 'applied', tabClosed: true },
-          recovery: { sourceRunId: run.id, stage: 'apply', evidence: ['diff checked'], proposal: snapshot },
-          recoveryResult: { status: 'done', summary: 'verified', links: ['https://example.com/result'], proposal, verification: ['tests pass'] },
-          paneRecoveredAt: run.createdAt, launchUncertain: false },
-      ],
-    }
-    saveState(home, full)
-    const original = readFileSync(statePath(home), 'utf8')
-    expect(loadState(home)).toEqual(full)
-    expect(readStateSnapshot(home)).toEqual({ kind: 'ok', state: full, mtime: statSync(statePath(home)).mtime.toISOString() })
+  function legacyRun(phase: Run['phase'] = { kind: 'done', at: run.createdAt, summary: 'saved', tabClosed: true }) {
+    return { ...run, phase, incident: { status: 'awaiting_approval', proposal: { revision: 'a'.repeat(64), body: { summary: 'old proposal' } } }, recovery: { stage: 'prepare' }, recoveryResult: { status: 'done', summary: 'old result', links: [] } }
+  }
+
+  function withoutLegacy<T extends { incident?: unknown; recovery?: unknown; recoveryResult?: unknown }>(value: T) {
+    const copy = { ...value }
+    delete copy.incident
+    delete copy.recovery
+    delete copy.recoveryResult
+    return copy
+  }
+
+  it('K2-1 / I2: loads and saves 29 legacy terminal runs without incident, recovery or recoveryResult', () => {
+    const phases: Run['phase'][] = [
+      { kind: 'done', at: run.createdAt, summary: 'saved', tabClosed: true },
+      { kind: 'failed', at: run.createdAt, reason: 'failure', tabClosed: false },
+      { kind: 'aborted', at: run.createdAt, reason: 'stopped' },
+    ]
+    const runs = Array.from({ length: 29 }, (_, i) => ({ ...legacyRun(phases[i % 3]), id: `20261023-0017-${i.toString(16).padStart(6, '0')}` }))
+    writeStateFile(JSON.stringify({ ...savedState, runs }))
+    const loaded = loadState(home)
+    expect(loaded.runs).toEqual(runs.map(withoutLegacy))
+    saveState(home, loaded)
+    expect(JSON.parse(readFileSync(statePath(home), 'utf8')).runs).toEqual(runs.map(withoutLegacy))
+  })
+
+  it('K2-2 / I2: removes malformed legacy fields without rejecting the state', () => {
+    writeStateFile(JSON.stringify({ ...savedState, runs: [{ ...legacyRun(), incident: 'broken', recovery: 42, recoveryResult: null }] }))
+    expect(loadState(home).runs).toEqual([withoutLegacy(legacyRun())])
+  })
+
+  it('K2-3 / I2: snapshot applies the same migration without writing the file', () => {
+    const original = JSON.stringify({ ...savedState, runs: [legacyRun()] })
+    writeStateFile(original)
+    expect(readStateSnapshot(home)).toMatchObject({ kind: 'ok', state: { ...savedState, runs: [withoutLegacy(legacyRun())] } })
     expect(readFileSync(statePath(home), 'utf8')).toBe(original)
+  })
+
+  it('K2-4 / I2: saving and reloading a converted unfinished child is idempotent', () => {
+    writeStateFile(JSON.stringify({ ...savedState, runs: [legacyRun(run.phase)] }))
+    const converted = loadState(home)
+    expect(loadState(home)).toEqual(converted)
+    saveState(home, converted)
+    expect(loadState(home)).toEqual(converted)
+    expect(converted.runs[0].history).toEqual([...run.history, { kind: 'failed', at: run.createdAt }])
+  })
+
+  it('K2-5 / I2: preserves normal runs and every other state field', () => {
+    const full = { ...savedState, daemonInfo: { pid: 42, startedAt: run.createdAt, lastCycleAt: run.createdAt, lastCycleError: null, orcaVersion: '1.4', cycleSeconds: 20 }, runs: [run, legacyRun()] }
+    writeStateFile(JSON.stringify(full))
+    expect(loadState(home)).toEqual({ ...full, runs: [run, withoutLegacy(legacyRun())] })
+  })
+
+  it('K3-1 / I3: queued child becomes failed with a closed tab and is recent', () => {
+    writeStateFile(JSON.stringify({ ...emptyState, runs: [legacyRun(run.phase)] }))
+    const converted = loadState(home).runs[0]
+    expect(converted.phase).toEqual({ kind: 'failed', at: run.createdAt, reason: 'incident layer removed; the run was not finished', tabClosed: true })
+    expect(converted.history).toEqual([...run.history, { kind: 'failed', at: run.createdAt }])
+    const model = buildMonitorModel({ home, now: run.createdAt, daemonPid: null, state: loadState(home), stateError: null, stateMtime: run.createdAt, lockError: null, config: { kind: 'unknown', disk: null, diskError: null } })
+    expect(model.sections.find((section) => section.id === 'recent')?.rows.map((row) => row.ref)).toContainEqual({ kind: 'run', runId: run.id })
+  })
+
+  it('K3-3 / I3: completed child keeps its phase and history', () => {
+    writeStateFile(JSON.stringify({ ...savedState, runs: [legacyRun()] }))
+    expect(loadState(home).runs[0]).toEqual(withoutLegacy(legacyRun()))
+  })
+
+  it('I3: starting children are failed and retain uncertain launch bookkeeping', () => {
+    const child = { ...legacyRun({ kind: 'starting', since: run.createdAt }), launchUncertain: true, paneRecoveredAt: run.createdAt }
+    writeStateFile(JSON.stringify({ ...savedState, runs: [child] }))
+    expect(loadState(home).runs[0]).toMatchObject({ phase: { kind: 'failed', at: run.createdAt, tabClosed: false }, launchUncertain: true, paneRecoveredAt: run.createdAt })
   })
 
   const configStatus = { loadedAt: '2026-10-23T00:10:00.000Z', sha256: 'f592d9dda76b68357b4dbab16c16d11f30483cd7294ae0a6329c8c28d40bfca1', error: null }
@@ -566,18 +612,13 @@ describe('newRunId', () => {
   })
 })
 
-describe('incident recovery save contract', () => {
-  it('loads an existing state without adding an incident and keeps investigation and approval requests', () => {
-    saveState(home, emptyState)
-    expect(loadState(home)).toEqual(emptyState)
-    writeRequest(home, { type: 'investigate', runId: '20261023-0917-3f9a1c', evidence: 'a new fact' })
-    writeRequest(home, { type: 'approve', runId: '20261023-0917-3f9a1c', revision: 'a'.repeat(64) })
-    expect(readRequests(home).map((read) => 'request' in read ? read.request.type : 'invalid').sort()).toEqual(['approve', 'investigate'])
-  })
-
-  it('rejects an approval request with a tampered revision', () => {
+describe('removed request parsing: I6', () => {
+  it.each([
+    { type: 'investigate', runId: '20261023-0017-3f9a1c', evidence: '' },
+    { type: 'approve', runId: '20261023-0017-3f9a1c', revision: 'a'.repeat(64) },
+  ])('rejects a legacy $type request with the original unsupported-type error', (request) => {
     mkdirSync(requestsDir(home), { recursive: true })
-    writeFileSync(join(requestsDir(home), 'bad.json'), JSON.stringify({ type: 'approve', runId: '20261023-0917-3f9a1c', revision: 'not-a-revision' }))
-    expect(readRequests(home)[0]).toMatchObject({ file: 'bad.json', error: expect.stringContaining('revision') })
+    writeFileSync(join(requestsDir(home), 'old.json'), JSON.stringify(request))
+    expect(readRequests(home)).toEqual([{ file: 'old.json', error: `type is not run / stop / rerun: "${request.type}"` }])
   })
 })

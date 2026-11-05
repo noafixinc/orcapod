@@ -5,12 +5,13 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { stringify } from 'yaml'
+import { buildMonitorModel } from '../src/monitor-model.ts'
 import { runCycle, start } from '../src/daemon.ts'
 import type { CycleMemory } from '../src/daemon.ts'
 import type { ExecFile } from '../src/orca.ts'
 import { OrcaError, createOrcaClient } from '../src/orca.ts'
 import { lockPath, logPath, requestsDir, statePath } from '../src/paths.ts'
-import { acquireDaemonLock, loadState, saveState, writeRequest } from '../src/state.ts'
+import { acquireDaemonLock, loadState, readRequests, saveState, writeRequest } from '../src/state.ts'
 import type { AgentObservation, CycleDeps, GithubSource, Item, OrcaClient, OrcaRef, OrcaSnapshot, Run, State } from '../src/types.ts'
 
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => undefined) }))
@@ -218,7 +219,6 @@ describe('runCycle', () => {
     expect(calls).toBe(1)
     await runCycle(depsWith(orca), fresh)
     expect(calls).toBe(1)
-    expect(loadState(home).runs[0].incident?.status).toBe('blocked')
     expect(loadState(home).runs[0].launchUncertain).toBe(true)
   })
 
@@ -594,19 +594,6 @@ describe('characterization tests (refactor #14)', () => {
     return observed
   }
 
-  function incident(): NonNullable<Run['incident']> {
-    return { status: 'blocked', reason: 'waiting for review', updatedAt: NOW, tasks: [], evidence: [], revisions: [] }
-  }
-
-  function recoverySource(): Run {
-    return runWith({
-      id: RUN_B,
-      orca: null,
-      phase: { kind: 'failed', at: NOW, reason: 'original failure', tabClosed: true },
-      incident: { ...incident(), tasks: [RUN_A] },
-    })
-  }
-
   it.each(['launching', 'starting'] as const)('a %s run is observed', async (kind) => {
     const observed = await observedFor([runWith({ phase: { kind, since: NOW }, orca: null })])
     expect(observed).toEqual([{ paths: [projectPath], hooks: false }])
@@ -624,43 +611,10 @@ describe('characterization tests (refactor #14)', () => {
     expect(observed).toEqual([{ paths: selected ? [projectPath] : [], hooks: false }])
   })
 
-  describe.each(['incident', 'recovery'] as const)('terminal run with %s', (metadata) => {
-    function trackedRun(overrides: Partial<Run>): Run[] {
-      const tracking: Partial<Run> = metadata === 'incident'
-        ? { incident: incident() }
-        : { recovery: { sourceRunId: RUN_B, stage: 'prepare', evidence: ['original failure'] } }
-      const run = runWith({ ...tracking, ...overrides })
-      return metadata === 'recovery' ? [run, recoverySource()] : [run]
-    }
-
-    it.each([
-      { label: 'a done run with an open tab and a reference is observed', tabClosed: false, hasRef: true, selected: true },
-      { label: 'a done run with a closed tab is not selected even with a reference', tabClosed: true, hasRef: true, selected: false },
-      { label: 'a done run with an open tab is not selected without a reference', tabClosed: false, hasRef: false, selected: false },
-    ])('$label', async ({ tabClosed, hasRef, selected }) => {
-      const observed = await observedFor(trackedRun({
-        orca: hasRef ? REF : null,
-        phase: { kind: 'done', at: NOW, summary: 'already done', tabClosed },
-      }))
-      expect(observed).toEqual([{ paths: selected ? [projectPath] : [], hooks: false }])
-    })
-
-    it.each([
-      { label: 'an aborted run without tabClosed is observed if it has a reference', hasRef: true },
-      { label: 'an aborted run without tabClosed is not selected without a reference', hasRef: false },
-    ])('$label', async ({ hasRef }) => {
-      const observed = await observedFor(trackedRun({
-        orca: hasRef ? REF : null,
-        phase: { kind: 'aborted', at: NOW, reason: 'already aborted' },
-      }))
-      expect(observed).toEqual([{ paths: hasRef ? [projectPath] : [], hooks: false }])
-    })
-  })
-
   it.each([
     { kind: 'done', at: NOW, summary: 'already done', tabClosed: false },
     { kind: 'aborted', at: NOW, reason: 'already aborted' },
-  ] satisfies Run['phase'][])('a $kind run without recovery information is not selected even with a tab reference', async (phase) => {
+  ] satisfies Run['phase'][])('a $kind run is not selected even with a tab reference', async (phase) => {
     const observed = await observedFor([runWith({ phase })])
     expect(observed).toEqual([{ paths: [], hooks: false }])
   })
@@ -947,50 +901,6 @@ describe('start', () => {
   })
 })
 
-describe('incident recovery cycle persistence', () => {
-  it('takes the result of a real file, does not apply before approval, and tracks until verification completes after approval', async () => {
-    writeConfig()
-    const source = runWith({ phase: { kind: 'failed', at: NOW, reason: 'operating doc mismatch', tabClosed: true }, orca: null, incident: { status: 'pending', reason: 'waiting to investigate', updatedAt: NOW, tasks: [], evidence: [], revisions: [] } })
-    saveState(home, stateWith({ runs: [source] }))
-    let creates = 0
-    const orca = orcaWith({
-      observe: async () => snapshot([], []),
-      createTerminal: async () => {
-        creates++
-        return { ref: { ...REF, handle: `term-${creates}`, paneKey: `tab-${creates}:pane`, tabId: `tab-${creates}` }, warning: null }
-      },
-    })
-    await runCycle(depsWith(orca), fresh)
-    let saved = loadState(home)
-    const prepareId = saved.runs[1].id
-    expect(saved.runs[1].recovery?.stage).toBe('prepare')
-    const proposal = { summary: 'align operations', cause: 'doc mismatch', evidence: ['checked the code'], changes: [], validation: ['unit tests passed'], actions: ['apply the approved scope and verify'], risks: [] }
-    writeFileSync(join(home, 'runs', prepareId, 'result.json'), JSON.stringify({ status: 'done', summary: 'prepared', links: [], proposal }))
-    await runCycle(depsWith(orca), fresh)
-    await runCycle(depsWith(orca), fresh)
-    saved = loadState(home)
-    expect(saved.runs[0].incident?.status).toBe('awaiting_approval')
-    expect(creates).toBe(1)
-    expect(notices.some((notice) => notice.title === 'orcapod: approval needed')).toBe(true)
-    const revision = saved.runs[0].incident!.proposal!.revision
-    writeRequest(home, { type: 'approve', runId: source.id, revision })
-    await runCycle(depsWith(orca), fresh)
-    saved = loadState(home)
-    const apply = saved.runs[2]
-    expect(creates).toBe(2)
-    expect(apply.recovery?.proposal?.revision).toBe(revision)
-    expect(readFileSync(join(home, 'runs', apply.id, 'prompt.md'), 'utf8')).toContain(revision)
-    writeFileSync(join(home, 'runs', apply.id, 'result.json'), JSON.stringify({ status: 'done', summary: 'applied', links: [], verification: ['verified consistency after applying'] }))
-    await runCycle(depsWith(orca), fresh)
-    await runCycle(depsWith(orca), fresh)
-    saved = loadState(home)
-    expect(saved.runs[0].incident?.status).toBe('resolved')
-    expect(saved.runs[0].phase.kind).toBe('failed')
-    expect(creates).toBe(2)
-    expect(saved.runs).toHaveLength(3)
-  })
-})
-
 describe('invalid late pane', () => {
   it.each(['{}', '{', '{"handle":"","tabId":"","paneKey":""}'])('a half-written or unidentifiable pane %s is not used for termination confirmation', async (pane) => {
     writeConfig()
@@ -1002,5 +912,99 @@ describe('invalid late pane', () => {
     expect(loadState(home).runs[0].launchUncertain).toBe(true)
     expect(loadState(home).runs[0].orca).toBeNull()
     expect(loadState(home).runs[0].phase).toMatchObject({ tabClosed: false })
+  })
+})
+
+describe('incident removal: I3 / I6', () => {
+  function saveChild(phase: Run['phase'], overrides: Partial<Run> = {}): Run {
+    writeConfig()
+    const child = runWith({ phase, ...overrides })
+    const legacy = { ...child, recovery: { stage: 'apply' } }
+    saveState(home, stateWith({ runs: [legacy] }))
+    return child
+  }
+
+  function sectionsFor(state: State): string[] {
+    return buildMonitorModel({ home, state, stateError: null, stateMtime: NOW, lockError: null, daemonPid: null, config: { kind: 'unknown', disk: null, diskError: null }, now: NOW }).sections.filter((section) => section.rows.some((row) => row.ref.kind === 'run' && row.ref.runId === RUN_A)).map((section) => section.id)
+  }
+
+  it('K3-2: a running child is failed, observed with an open tab, and never relaunched', async () => {
+    const child = saveChild({ kind: 'running', agent: 'working', agentSince: NOW, closeAttempts: 0 })
+    const createTerminal = vi.fn()
+    const observe = vi.fn(async () => snapshot())
+    const converted = loadState(home)
+    expect(converted.runs[0].phase).toEqual({ kind: 'failed', at: child.createdAt, reason: 'incident layer removed; the run was not finished', tabClosed: false })
+    expect(sectionsFor(converted)).toEqual(['attention'])
+    await runCycle(depsWith(orcaWith({ observe, createTerminal })), fresh)
+    expect(observe).toHaveBeenCalledWith({ paths: [projectPath], hooks: false })
+    expect(createTerminal).not.toHaveBeenCalled()
+    expect(loadState(home).runs[0].phase).toEqual(converted.runs[0].phase)
+  })
+
+  it('K3-4: rerunning a converted child creates a normal run and keeps the original failed run', async () => {
+    saveChild({ kind: 'queued', since: NOW }, { orca: null })
+    const original = loadState(home).runs[0]
+    writeRequest(home, { type: 'rerun', runId: original.id })
+    const createTerminal = vi.fn(async () => ({ ref: REF, warning: null }))
+    await runCycle(depsWith(orcaWith({ observe: async () => snapshot(), createTerminal })), fresh)
+    const saved = loadState(home)
+    expect(saved.runs[0]).toEqual(original)
+    expect(saved.runs).toHaveLength(2)
+    expect(saved.runs[1].phase.kind).toBe('starting')
+    expect(saved.runs[1]).not.toHaveProperty('recovery')
+    expect(saved.runs[1].history.map((entry) => entry.kind)).toEqual(['queued', 'launching', 'starting'])
+    expect(readFileSync(join(home, 'runs', saved.runs[1].id, 'prompt.md'), 'utf8')).toContain('concrete next action')
+    expect(createTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('K3-5: an uncertain launching child recovers a late pane without launching and becomes Recent when the pane vanishes', async () => {
+    const child = saveChild({ kind: 'launching', since: NOW }, { orca: null, launchUncertain: true })
+    const converted = loadState(home)
+    expect(converted.runs[0]).toMatchObject({ phase: { kind: 'failed', tabClosed: false }, launchUncertain: true })
+    expect(sectionsFor(converted)).toEqual(['attention'])
+    const createTerminal = vi.fn()
+    const deps = depsWith(orcaWith({ observe: async () => snapshot(), createTerminal }))
+    const first = await runCycle(deps, fresh)
+    expect(loadState(home).runs[0].orca).toBeNull()
+    mkdirSync(join(home, 'runs', child.id), { recursive: true })
+    writeFileSync(join(home, 'runs', child.id, 'pane.json'), JSON.stringify(REF))
+    const second = await runCycle({ ...deps, now: () => new Date(Date.parse(NOW) + 20_000) }, first)
+    expect(loadState(home).runs[0]).toMatchObject({ phase: { kind: 'failed', tabClosed: false }, orca: { ...REF, ptyId: '' } })
+    await runCycle(depsWith(orcaWith({ observe: async () => snapshot([], []), createTerminal }), async () => [], { now: () => new Date(Date.parse(NOW) + 40_000) }), second)
+    expect(loadState(home).runs[0].phase).toMatchObject({ kind: 'failed', tabClosed: true })
+    expect(sectionsFor(loadState(home))).toEqual(['recent'])
+    expect(createTerminal).not.toHaveBeenCalled()
+    expect(existsSync(join(home, 'runs', child.id, 'launch.sh'))).toBe(false)
+  })
+
+  it('K3-6: stop recovers the pane for a converted child without launchUncertain and closes its handle', async () => {
+    const child = saveChild({ kind: 'launching', since: NOW }, { orca: null })
+    mkdirSync(join(home, 'runs', child.id), { recursive: true })
+    writeFileSync(join(home, 'runs', child.id, 'pane.json'), JSON.stringify(REF))
+    writeRequest(home, { type: 'stop', runId: child.id })
+    const closeTerminal = vi.fn(async () => ({ ptyKilled: true }))
+    const createTerminal = vi.fn()
+    await runCycle(depsWith(orcaWith({ observe: async () => snapshot(), closeTerminal, createTerminal })), fresh)
+    expect(closeTerminal).toHaveBeenCalledExactlyOnceWith(REF.handle)
+    expect(createTerminal).not.toHaveBeenCalled()
+    expect(loadState(home).runs[0]).toMatchObject({ phase: { kind: 'failed', tabClosed: true }, orca: { ...REF, ptyId: '' } })
+  })
+
+  it.each([
+    ['K6-1', { type: 'investigate', runId: RUN_A, evidence: '' }],
+    ['K6-2', { type: 'approve', runId: RUN_A, revision: 'a'.repeat(64) }],
+  ])('%s / I6: consumes an obsolete request with a warning without changing runs, pending or processed', async (_id, request) => {
+    writeConfig()
+    const initial = stateWith({ runs: [runWith({ phase: { kind: 'done', at: NOW, summary: 'done', tabClosed: true } })] })
+    saveState(home, initial)
+    mkdirSync(requestsDir(home), { recursive: true })
+    writeFileSync(join(requestsDir(home), 'old.json'), JSON.stringify(request))
+    const read = readRequests(home)
+    expect(read[0]).toMatchObject({ error: expect.stringContaining('type is not run / stop / rerun') })
+    await runCycle(depsWith(orcaWith({ observe: async () => snapshot() })), fresh)
+    const saved = loadState(home)
+    expect([saved.runs, saved.pending, saved.processed]).toEqual([initial.runs, initial.pending, initial.processed])
+    expect(existsSync(join(requestsDir(home), 'old.json'))).toBe(false)
+    expect(logText()).toContain('type is not run / stop / rerun')
   })
 })

@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { checkProposal } from './approval.ts'
 import { loadConfig } from './config.ts'
 import { prepareRun, runTitle } from './launch.ts'
 import type { RunDirMode } from './launch.ts'
@@ -226,7 +225,6 @@ function isObservationTarget(run: Run, stopTargets: ReadonlySet<string>): boolea
     || run.launchUncertain === true
     || stopTargets.has(run.id)
     || hasTrackableOpenFailedTab(run)
-    || hasTrackableOpenResolutionTab(run)
 }
 
 function isActive(phase: RunPhase): boolean {
@@ -235,12 +233,6 @@ function isActive(phase: RunPhase): boolean {
 
 function hasTrackableOpenFailedTab(run: Run): boolean {
   return run.phase.kind === 'failed' && !run.phase.tabClosed && run.orca !== null
-}
-
-function hasTrackableOpenResolutionTab(run: Run): boolean {
-  return run.orca !== null
-    && (run.recovery !== undefined || run.incident !== undefined)
-    && (!('tabClosed' in run.phase) || !run.phase.tabClosed)
 }
 
 function readResults(home: string, state: State): Observations['results'] {
@@ -305,11 +297,6 @@ async function launch(deps: CycleDeps, config: Config, state: State, runId: stri
   if (run === undefined) return state
   let creatingTerminal = false
   try {
-    if (run.recovery?.stage === 'apply') {
-      const source = state.runs.find((candidate) => candidate.id === run.recovery!.sourceRunId)
-      if (source?.incident?.status !== 'applying' || source.incident.approvedRevision !== run.recovery.proposal?.revision) throw new Error('the approval has expired')
-      checkProposal(run.recovery.proposal!, config, source)
-    }
     const prepared = prepareRun(deps.home, run, config, dirMode)
     creatingTerminal = true
     const created = await deps.orca.createTerminal({ worktreePath: run.target.path, title: prepared.title, command: prepared.command })
