@@ -339,10 +339,90 @@ describe('detect', () => {
     expect([effects, state.lastPolledAt, state.projectErrors, state.watchedRules]).toEqual([[], {}, {}, []])
   })
 
+  it('RT11: a detection whose item is already in the pending is not added twice, and fireAt is still extended', () => {
+    const config = configWith([projectWith({ rules: [IMPL, DEPS] })])
+    const start = stateWith({ watchedRules: [IMPL_KEY, DEPS_KEY], pending: [{ ruleKey: DEPS_KEY, project: 'todos', items: [pr(5)], fireAt: at(3) }] })
+    const { state } = tick(start, obsAt(at(1), { config, github: { todos: { ok: true, items: [pr(5), pr(6)] } } }))
+    expect(state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: [pr(5), pr(6)], fireAt: at(6) }])
+    expect(state.processed.map((p) => p.key)).toEqual(['["todos","pr",5,"dependencies"]', '["todos","pr",6,"dependencies"]'])
+  })
+
   it('C51: only projects present in obs.github get lastPolledAt set to now', () => {
     const start = stateWith({ lastPolledAt: { todos: T0, other: T0 } })
     const { state } = tick(start, obsAt(at(1), { github: { todos: { ok: true, items: [] } } }))
     expect(state.lastPolledAt).toEqual({ todos: '2026-10-23T00:01:00.000Z', other: '2026-10-23T00:00:00.000Z' })
+  })
+})
+
+describe('rearm', () => {
+  const RETRY_AT = '2026-10-23T09:10:00+09:00'
+  const BOT: Item['author'] = { login: 'dependabot[bot]', bot: true, association: 'NONE' }
+  const WATCHED = [IMPL_KEY, DEPS_KEY]
+  const config = configWith([projectWith({ rules: [IMPL, DEPS] })])
+  const bumps = (numbers: number[]): Item[] => numbers.map((n) => pr(n, BOT))
+  const depsKey = (n: number): string => `["todos","pr",${n},"dependencies"]`
+  const marked = (numbers: number[]): State['processed'] => numbers.map((n) => ({ key: depsKey(n), seenAt: T0 }))
+  const polled = (numbers: number[]): Observations['github'] => ({ todos: { ok: true, items: bumps(numbers) } })
+  const held = (numbers: number[], overrides: Partial<Run> = {}): Run => runWith({ rule: DEPS, kindName: 'Dependabot', items: bumps(numbers), retryAt: RETRY_AT, phase: { kind: 'done', at: at(1), summary: 'held', tabClosed: true }, ...overrides })
+  const logs = (effects: Effect[]): string[] => effects.flatMap((e) => (e.type === 'log' ? [`${e.level} ${e.message}`] : []))
+
+  it('RT1: at the retry time (compared as times across +09:00 and Z), re-arms only the open items that are not in flight, and detect picks them up in the same cycle', () => {
+    const start = stateWith({
+      watchedRules: WATCHED,
+      processed: marked([5, 6, 7, 8]),
+      pending: [{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([6]), fireAt: at(12) }],
+      runs: [held([5, 6, 7, 8]), queuedRun('run-b', at(9), { rule: DEPS, items: bumps([8]) })],
+    })
+    const { state, effects } = tick(start, obsAt(at(10), { config, github: polled([5, 6, 8]), orca: { ok: false, error: 'offline' } }))
+    expect(state.runs[0]).not.toHaveProperty('retryAt')
+    expect(state.processed).toEqual([...marked([6, 7, 8]), { key: depsKey(5), seenAt: at(10) }])
+    expect(state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([6, 5]), fireAt: at(15) }])
+    expect(logs(effects)).toEqual([
+      'info run run-a: retry at 2026-10-23T09:10:00+09:00 reached; re-armed 1 (skipped 1 closed, 2 in flight, 0 not marked as processed)',
+      'info detected todos / pr / dependencies: #5 → launches at 2026-10-23T00:15:00.000Z',
+    ])
+  })
+
+  it.each([
+    ['before the retry time', at(9, 59), polled([5]), WATCHED],
+    ['when GitHub was not polled in the cycle', at(10), {}, WATCHED],
+    ['when the poll failed', at(10), { todos: { ok: false as const, error: 'HTTP 502' } }, WATCHED],
+    ['while the rule is not watched yet', at(10), polled([5]), [IMPL_KEY]],
+  ])('RT2: keeps the retry time and processed %s', (_name, now, github, watchedRules) => {
+    const { state } = tick(stateWith({ watchedRules, processed: marked([5]), runs: [held([5])] }), obsAt(now, { config, github }))
+    expect(state.runs[0].retryAt).toBe(RETRY_AT)
+    expect(state.processed).toEqual(marked([5]))
+    expect(state.pending).toEqual([])
+  })
+
+  it('RT3: when the rule is gone from the config, drops the retry time with a warn and leaves processed as is', () => {
+    const { state, effects } = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [held([5])] }), obsAt(at(10), { config: configWith(), github: polled([5]) }))
+    expect(state.runs[0]).not.toHaveProperty('retryAt')
+    expect(state.processed).toEqual(marked([5]))
+    expect(logs(effects)).toEqual(['warn run run-a: rule ["todos","pr","dependencies"] is not in the config; dropped the retry at 2026-10-23T09:10:00+09:00'])
+  })
+
+  it('RT4: a manual run consumes the retry time without removing any processed key', () => {
+    const manual = held([5], { manual: true, rule: { ...DEPS, label: '', batch: 'each', delayMinutes: 0 } })
+    const { state, effects } = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [manual] }), obsAt(at(10), { config, github: polled([5]) }))
+    expect(state.runs[0]).not.toHaveProperty('retryAt')
+    expect(state.processed).toEqual(marked([5]))
+    expect(logs(effects)).toEqual(['info run run-a: retry at 2026-10-23T09:10:00+09:00 reached; re-armed 0 (skipped 0 closed, 0 in flight, 1 not marked as processed)'])
+  })
+
+  it.each([
+    { kind: 'done', at: at(1), summary: 'held', tabClosed: true },
+    { kind: 'failed', at: at(1), reason: 'AI reported failed: held', tabClosed: true },
+    { kind: 'aborted', at: at(1), reason: 'pane and tab disappeared' },
+  ] as const)('RT5: a $kind run re-arms once, and the next cycle changes processed no further', (phase) => {
+    const first = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [held([5], { phase })] }), obsAt(at(10), { config, github: polled([5]) }))
+    expect(first.state.runs[0]).not.toHaveProperty('retryAt')
+    expect(first.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(first.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+    const next = tick(first.state, obsAt(at(11), { config, github: polled([5]) }))
+    expect(next.state.processed).toEqual(first.state.processed)
+    expect(next.state.pending).toEqual(first.state.pending)
+    expect(logs(next.effects)).toEqual([])
   })
 })
 
@@ -1006,6 +1086,61 @@ describe('track: running', () => {
   })
 })
 
+describe('track: retryAt in result.json', () => {
+  const HELD_UNTIL = '2026-11-14T00:00:00+09:00'
+  const working = seen({ agents: [agent('working', T0)] })
+  const resultWith = (status: string, retryAt: unknown): string => JSON.stringify({ status, summary: 'held', links: [], retryAt })
+
+  it.each([
+    ['a +09:00 offset', HELD_UNTIL],
+    ['UTC 1 ms after the result was written', '2026-10-23T00:01:00.001Z'],
+    ['no seconds', '2026-11-14T00:00+09:00'],
+  ])('RT6: accepts %s and mirrors it onto the run', (_name, retryAt) => {
+    const { state } = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca: working, results: { 'run-a': { raw: resultWith('done', retryAt), mtime: at(1) } } }))
+    expect(onlyRun(state).retryAt).toBe(retryAt)
+    expect(onlyRun(state).phase).toMatchObject({ kind: 'running', result: { file: { status: 'done', summary: 'held', links: [], retryAt }, mtime: at(1) } })
+  })
+
+  it.each([
+    ['done', 1794582000000],
+    ['failed', 1794582000000],
+    ['done', null],
+    ['done', '2026-11-14T00:00:00'],
+    ['done', '2026-11-14 00:00:00Z'],
+    ['done', '2026-13-14T00:00:00Z'],
+    ['done', '2026-10-23T00:01:00.000Z'],
+    ['failed', '2026-10-23T09:00:00+09:00'],
+  ])('RT7: a %s result with retryAt %j is invalid, and the run drops the retry time it had', (status, retryAt) => {
+    const { state, effects } = tick(stateWith({ runs: [runWith({ retryAt: HELD_UNTIL })] }), obsAt(at(2), { orca: working, results: { 'run-a': { raw: resultWith(status, retryAt), mtime: at(1) } } }))
+    expect(onlyRun(state)).not.toHaveProperty('retryAt')
+    expect(onlyRun(state).phase).toEqual({ kind: 'running', agent: 'working', agentSince: T0, closeAttempts: 0, invalidResultSince: at(2) })
+    expect(effects).toEqual([])
+  })
+
+  it.each(['done', 'failed'] as const)('RT8: a %s result keeps its retry time on the finished run', (status) => {
+    const starting = runWith({ phase: { kind: 'starting', since: T0 } })
+    const { state } = tick(stateWith({ runs: [starting] }), obsAt(at(2), { orca: seen({ terminals: [] }), results: { 'run-a': { raw: resultWith(status, HELD_UNTIL), mtime: at(1) } } }))
+    expect(onlyRun(state).phase.kind).toBe(status)
+    expect(onlyRun(state).retryAt).toBe(HELD_UNTIL)
+  })
+
+  it('RT9: while running, the run follows each rewrite of result.json, including the removal of retryAt', () => {
+    const first = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca: working, results: { 'run-a': { raw: resultWith('done', HELD_UNTIL), mtime: at(1) } } }))
+    const rewritten = tick(first.state, obsAt(at(3), { orca: working, results: { 'run-a': { raw: resultWith('done', '2026-11-15T00:00:00Z'), mtime: at(2, 30) } } }))
+    const dropped = tick(rewritten.state, obsAt(at(4), { orca: working, results: { 'run-a': { raw: resultFile('done'), mtime: at(3, 30) } } }))
+    expect([first, rewritten, dropped].map(({ state }) => onlyRun(state).retryAt)).toEqual([HELD_UNTIL, '2026-11-15T00:00:00Z', undefined])
+    expect(onlyRun(dropped.state)).not.toHaveProperty('retryAt')
+  })
+
+  it('RT10: a run made done by the close limit while result.json has an invalid retryAt carries no retry time', () => {
+    const saved = { file: { status: 'done' as const, summary: 'held', links: [], retryAt: HELD_UNTIL }, mtime: at(1) }
+    const start = runWith({ retryAt: HELD_UNTIL, phase: { kind: 'running', agent: 'done', agentSince: at(1), result: saved, closeAttempts: 3 } })
+    const { state } = tick(stateWith({ runs: [start] }), obsAt(at(5), { orca: seen({ agents: [agent('done', at(1, 30))] }), results: { 'run-a': { raw: resultWith('done', 'tomorrow'), mtime: at(4) } } }))
+    expect(onlyRun(state).phase).toEqual({ kind: 'done', at: at(5), summary: 'held', tabClosed: false })
+    expect(onlyRun(state)).not.toHaveProperty('retryAt')
+  })
+})
+
 describe('serve', () => {
   const request = { type: 'run' as const, project: 'todos', item: issue(42), kind: 'feature', now: false }
 
@@ -1258,7 +1393,10 @@ describe('properties of tick', () => {
     const start = stateWith({
       processed: [{ key: '["todos","issue",1,"impl"]', seenAt: T0 }, { key: '["todos","issue",2,"impl"]', seenAt: T0 }],
       pending: [{ ruleKey: IMPL_KEY, project: 'todos', items: [issue(1), issue(2)], fireAt: T0 }],
-      runs: [runWith({ id: 'run-w', phase: { kind: 'running', agent: 'working', agentSince: T0, closeAttempts: 0 } })],
+      runs: [
+        runWith({ id: 'run-w', phase: { kind: 'running', agent: 'working', agentSince: T0, closeAttempts: 0 } }),
+        runWith({ id: 'run-r', items: [issue(1), issue(3)], retryAt: at(10), phase: { kind: 'done', at: T0, summary: 'held', tabClosed: true } }),
+      ],
     })
     const obs = obsAt(at(11), {
       github: { todos: { ok: true, items: [issue(1)] } },
@@ -1270,7 +1408,8 @@ describe('properties of tick', () => {
     const once = tick(start, obs)
     const twice = tick(start, obs)
     expect(twice).toEqual(once)
-    expect(once.state.runs.map((r) => r.id)).toEqual(['run-w', '20261023-0011-243263', '20261023-0011-15f3aa', '20261023-0011-9d5b75'])
+    expect(once.state.runs.map((r) => r.id)).toEqual(['run-w', 'run-r', '20261023-0011-243263', '20261023-0011-15f3aa', '20261023-0011-9d5b75'])
+    expect(once.state.runs[1]).not.toHaveProperty('retryAt')
     expect(start).toEqual(stateBefore)
     expect(obs).toEqual(obsBefore)
   })
@@ -1384,5 +1523,350 @@ describe('incident removal: I7', () => {
     const next = tick(initial, obsAt(at(2), { config: configWith([projectWith()], 1) }))
     expect(next.effects).toEqual([{ type: 'launch', runId: 'first' }])
     expect(next.state.runs.map((run) => run.phase.kind)).toEqual(['launching', 'queued'])
+  })
+})
+
+describe('conditions: retryAt re-arming', () => {
+  const RETRY_AT = '2026-10-23T09:10:00+09:00'
+  const RETRY_AT_UTC = '2026-10-23T00:10:00.000Z'
+  const HELD_UNTIL = '2026-11-14T00:00:00+09:00'
+  const BOT: Item['author'] = { login: 'dependabot[bot]', bot: true, association: 'NONE' }
+  const WATCHED = [IMPL_KEY, DEPS_KEY]
+  const config = configWith([projectWith({ rules: [IMPL, DEPS] })])
+  const bumps = (numbers: number[]): Item[] => numbers.map((n) => pr(n, BOT))
+  const depsKey = (n: number): string => `["todos","pr",${n},"dependencies"]`
+  const marked = (numbers: number[]): State['processed'] => numbers.map((n) => ({ key: depsKey(n), seenAt: T0 }))
+  const polled = (numbers: number[]): Observations['github'] => ({ todos: { ok: true, items: bumps(numbers) } })
+  const finishedPhase: Run['phase'] = { kind: 'done', at: at(1), summary: 'held', tabClosed: true }
+  const held = (numbers: number[], overrides: Partial<Run> = {}): Run => runWith({ rule: DEPS, kindName: 'Dependabot', items: bumps(numbers), retryAt: RETRY_AT, phase: finishedPhase, ...overrides })
+  const logs = (effects: Effect[]): string[] => effects.flatMap((e) => (e.type === 'log' ? [`${e.level} ${e.message}`] : []))
+  const resultWith = (status: string, retryAt: unknown): string => JSON.stringify({ status, summary: 'held', links: [], retryAt })
+  const working = seen({ agents: [agent('working', T0)] })
+  const heldState = (): State => stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [held([5])] })
+
+  it('RA1 (A1): a held PR is re-armed at the retry time, enters pending in the same cycle, fires after delayMinutes, and the new run is launched', () => {
+    const c1 = tick(heldState(), obsAt(at(10), { config, github: polled([5]) }))
+    expect(c1.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(c1.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+    const c2 = tick(c1.state, obsAt(at(14, 59), { config, github: polled([5]) }))
+    expect(c2.state.pending).toEqual(c1.state.pending)
+    expect(c2.state.runs).toHaveLength(1)
+    const c3 = tick(c2.state, obsAt(at(15), { config, github: polled([5]) }))
+    expect(c3.state.pending).toEqual([])
+    expect(c3.state.runs).toHaveLength(2)
+    const fresh = c3.state.runs[1]
+    expect(fresh).toMatchObject({ project: 'todos', items: bumps([5]), manual: false, phase: { kind: 'launching', since: at(15) } })
+    expect(fresh.rule).toEqual(DEPS)
+    expect(fresh).not.toHaveProperty('retryAt')
+    expect(c3.effects).toContainEqual({ type: 'launch', runId: fresh.id })
+    expect(c3.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+  })
+
+  it('RA2 (A2): one second before the retry time nothing changes in the whole state except lastPolledAt', () => {
+    const start = heldState()
+    const { state, effects } = tick(start, obsAt(at(9, 59), { config, github: polled([5]) }))
+    expect(state).toEqual({ ...start, lastPolledAt: { todos: at(9, 59) } })
+    expect(effects).toEqual([])
+  })
+
+  it('RA3 (A3): a closed PR keeps its processed key, the retry time is consumed with a log, and later cycles (even if it shows up again) do not re-detect it', () => {
+    const c1 = tick(heldState(), obsAt(at(10), { config, github: polled([]) }))
+    expect(c1.state.runs[0]).not.toHaveProperty('retryAt')
+    expect(c1.state.processed).toEqual(marked([5]))
+    expect(c1.state.pending).toEqual([])
+    expect(logs(c1.effects)).toEqual([`info run run-a: retry at ${RETRY_AT} reached; re-armed 0 (skipped 1 closed, 0 in flight, 0 not marked as processed)`])
+    const c2 = tick(c1.state, obsAt(at(11), { config, github: polled([]) }))
+    const c3 = tick(c2.state, obsAt(at(12), { config, github: polled([5]) }))
+    for (const { state, effects } of [c2, c3]) {
+      expect(state.processed).toEqual(marked([5]))
+      expect(state.pending).toEqual([])
+      expect(logs(effects)).toEqual([])
+    }
+  })
+
+  it('RA4 (A4): with no poll or a failed poll the retry time is kept and processed is untouched, and the next successful poll re-arms', () => {
+    const c1 = tick(heldState(), obsAt(at(10), { config, github: {} }))
+    const c2 = tick(c1.state, obsAt(at(11), { config, github: { todos: { ok: false, error: 'HTTP 502' } } }))
+    for (const { state } of [c1, c2]) {
+      expect(state.runs[0].retryAt).toBe(RETRY_AT)
+      expect(state.processed).toEqual(marked([5]))
+      expect(state.pending).toEqual([])
+    }
+    const c3 = tick(c2.state, obsAt(at(12), { config, github: polled([5]) }))
+    expect(c3.state.runs[0]).not.toHaveProperty('retryAt')
+    expect(c3.state.processed).toEqual([{ key: depsKey(5), seenAt: at(12) }])
+    expect(c3.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(17) }])
+  })
+
+  it('RA5 (A5): in a together run where only #5 is closed, only the key of #6 is re-armed and pending holds only #6', () => {
+    const start = stateWith({ watchedRules: WATCHED, processed: marked([5, 6]), runs: [held([5, 6])] })
+    const { state, effects } = tick(start, obsAt(at(10), { config, github: polled([6]) }))
+    expect(state.processed).toEqual([{ key: depsKey(5), seenAt: T0 }, { key: depsKey(6), seenAt: at(10) }])
+    expect(state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([6]), fireAt: at(15) }])
+    expect(logs(effects)[0]).toBe(`info run run-a: retry at ${RETRY_AT} reached; re-armed 1 (skipped 1 closed, 0 in flight, 0 not marked as processed)`)
+  })
+
+  it.each([
+    ['equal to the mtime', '2026-10-23T00:01:00.000Z'],
+    ['before the mtime', '2026-10-23T00:00:30.000Z'],
+    ['a number', 1794582000000],
+    ['tomorrow', 'tomorrow'],
+    ['an RFC 2822 style string', 'November 8, 2026 00:00:00 GMT'],
+    ['a time without a timezone', '2026-11-14T00:00:00'],
+  ])('RA6 (A6): retryAt %s makes the result invalid, the run fails after 60 seconds without a retry time, and processed never changes afterwards', (_name, retryAt) => {
+    const processed = [{ key: '["todos","issue",123,"impl"]', seenAt: T0 }]
+    const results = { 'run-a': { raw: resultWith('done', retryAt), mtime: at(1) } }
+    const c1 = tick(stateWith({ processed, runs: [runWith()] }), obsAt(at(2), { orca: working, results }))
+    expect(onlyRun(c1.state)).not.toHaveProperty('retryAt')
+    expect(onlyRun(c1.state).phase).toMatchObject({ kind: 'running', invalidResultSince: at(2) })
+    const c2 = tick(c1.state, obsAt(at(3), { orca: working, results }))
+    expect(onlyRun(c2.state)).not.toHaveProperty('retryAt')
+    expect(onlyRun(c2.state).phase).toMatchObject({ kind: 'failed', reason: 'result.json is invalid' })
+    const c3 = tick(c2.state, obsAt(at(10), { orca: working, results, github: { todos: { ok: true, items: [issue(123)] } } }))
+    expect(onlyRun(c3.state)).not.toHaveProperty('retryAt')
+    expect(c3.state.processed).toEqual(processed)
+    expect(c3.state.pending).toEqual([])
+    expect(logs(c3.effects).filter((m) => m.includes('retry at'))).toEqual([])
+  })
+
+  it('RA7 (A7): a failed result with a valid retryAt keeps it on the failed run, and the key is re-armed once the time is reached', () => {
+    const processed = [{ key: '["todos","issue",123,"impl"]', seenAt: T0 }]
+    const c1 = tick(stateWith({ processed, runs: [runWith()] }), obsAt(at(2), { orca: working, results: { 'run-a': { raw: resultWith('failed', RETRY_AT_UTC), mtime: at(1) } } }))
+    expect(onlyRun(c1.state).phase).toMatchObject({ kind: 'failed' })
+    expect(onlyRun(c1.state).retryAt).toBe(RETRY_AT_UTC)
+    const c2 = tick(c1.state, obsAt(at(10), { orca: working, github: { todos: { ok: true, items: [issue(123)] } } }))
+    expect(onlyRun(c2.state)).not.toHaveProperty('retryAt')
+    expect(c2.state.processed).toEqual([{ key: '["todos","issue",123,"impl"]', seenAt: at(10) }])
+    expect(c2.state.pending).toEqual([{ ruleKey: IMPL_KEY, project: 'todos', items: [issue(123)], fireAt: at(15) }])
+  })
+
+  it('RA8b (A8b / N2): a rerun of an automatic run starts without retryAt, inherits the label, and its own later retryAt re-arms the key', () => {
+    const original = runWith({ rule: DEPS, kindName: 'Dependabot', items: bumps([5]), phase: finishedPhase })
+    const start = stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [original] })
+    const c1 = tick(start, obsAt(at(1), { config, requests: [{ file: 'r1.json', request: { type: 'rerun', runId: 'run-a' } }] }))
+    const rerun = c1.state.runs[1]
+    expect(rerun).toMatchObject({ manual: true, items: bumps([5]) })
+    expect(rerun.rule).toEqual(DEPS)
+    expect(rerun).not.toHaveProperty('retryAt')
+    const starting: Run = { ...rerun, startedAt: at(1), orca: REF, phase: { kind: 'starting', since: at(1) } }
+    const c2 = tick({ ...c1.state, runs: [original, starting] }, obsAt(at(2), { config, orca: seen({ terminals: [] }), results: { [rerun.id]: { raw: resultWith('done', RETRY_AT_UTC), mtime: at(1, 30) } } }))
+    expect(c2.state.runs[1].phase.kind).toBe('done')
+    expect(c2.state.runs[1].retryAt).toBe(RETRY_AT_UTC)
+    expect(c2.state.processed).toEqual(marked([5]))
+    const c3 = tick(c2.state, obsAt(at(10), { config, github: polled([5]) }))
+    expect(c3.state.runs[1]).not.toHaveProperty('retryAt')
+    expect(c3.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(c3.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+  })
+
+  it('RA9a (A9): a -09:00 retry time that looks earlier as a string but is later as a time is not reached', () => {
+    const start = stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [held([5], { retryAt: '2026-10-23T00:30:00-09:00' })] })
+    const { state } = tick(start, obsAt(at(300), { config, github: polled([5]) }))
+    expect(state.runs[0].retryAt).toBe('2026-10-23T00:30:00-09:00')
+    expect(state.processed).toEqual(marked([5]))
+    expect(state.pending).toEqual([])
+  })
+
+  it('RA9b (A9): a -09:00 retry time that looks earlier than the mtime as a string but is later as a time is accepted', () => {
+    const retryAt = '2026-10-23T00:30:00-09:00'
+    const { state } = tick(stateWith({ runs: [runWith()] }), obsAt(at(301), { orca: working, results: { 'run-a': { raw: resultWith('done', retryAt), mtime: at(300) } } }))
+    expect(onlyRun(state).retryAt).toBe(retryAt)
+    expect(onlyRun(state).phase).not.toHaveProperty('invalidResultSince')
+  })
+
+  it('RA9c (A9): a +09:00 retry time that looks later than the mtime as a string but equals it as a time is invalid', () => {
+    const { state } = tick(stateWith({ runs: [runWith()] }), obsAt(at(301), { orca: working, results: { 'run-a': { raw: resultWith('done', '2026-10-23T14:00:00+09:00'), mtime: at(300) } } }))
+    expect(onlyRun(state)).not.toHaveProperty('retryAt')
+    expect(onlyRun(state).phase).toMatchObject({ invalidResultSince: at(301) })
+  })
+
+  it('RA10 (A10): rewriting result.json to an invalid retryAt removes the retry time the run had, and a later valid rewrite restores it', () => {
+    const first = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca: working, results: { 'run-a': { raw: resultWith('done', HELD_UNTIL), mtime: at(1) } } }))
+    const broken = tick(first.state, obsAt(at(3), { orca: working, results: { 'run-a': { raw: resultWith('done', 'tomorrow'), mtime: at(2, 30) } } }))
+    const fixed = tick(broken.state, obsAt(at(3, 30), { orca: working, results: { 'run-a': { raw: resultWith('done', HELD_UNTIL), mtime: at(3, 10) } } }))
+    expect([first, broken, fixed].map(({ state }) => onlyRun(state).retryAt)).toEqual([HELD_UNTIL, undefined, HELD_UNTIL])
+    expect(onlyRun(broken.state).phase).toMatchObject({ invalidResultSince: at(3) })
+    expect(onlyRun(fixed.state).phase).not.toHaveProperty('invalidResultSince')
+  })
+
+  it('RA11 (A11): an accepted retryAt stays valid while the run is still running past that time, and the close is still issued', () => {
+    const results = { 'run-a': { raw: resultWith('done', RETRY_AT_UTC), mtime: at(1) } }
+    let current = tick(stateWith({ runs: [runWith()] }), obsAt(at(2), { orca: working, results })).state
+    for (const minute of [3, 9, 10, 11]) {
+      current = tick(current, obsAt(at(minute), { orca: working, results })).state
+      expect(onlyRun(current).retryAt).toBe(RETRY_AT_UTC)
+      expect(onlyRun(current).phase).toMatchObject({ kind: 'running', result: { file: { retryAt: RETRY_AT_UTC } } })
+      expect(onlyRun(current).phase).not.toHaveProperty('invalidResultSince')
+    }
+    const last = tick(current, obsAt(at(12), { orca: seen({ agents: [agent('done', at(11))] }), results }))
+    expect(last.effects).toContainEqual({ type: 'close', runId: 'run-a', handle: 'term_a' })
+    expect(onlyRun(last.state).retryAt).toBe(RETRY_AT_UTC)
+    expect(onlyRun(last.state).phase).not.toHaveProperty('invalidResultSince')
+  })
+
+  it('RA12a (A12): a second held run with the same PR whose time arrives while the PR is in pending does not re-arm it, adds no duplicate, and logs the in-flight skip', () => {
+    const a = held([5], { id: 'run-a', retryAt: RETRY_AT_UTC })
+    const b = held([5], { id: 'run-b', retryAt: at(11) })
+    const c1 = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [a, b] }), obsAt(at(10), { config, github: polled([5]) }))
+    expect(c1.state.pending[0].items).toEqual(bumps([5]))
+    const c2 = tick(c1.state, obsAt(at(11), { config, github: polled([5]) }))
+    expect(c2.state.runs[1]).not.toHaveProperty('retryAt')
+    expect(c2.state.processed).toEqual(c1.state.processed)
+    expect(c2.state.pending).toHaveLength(1)
+    expect(c2.state.pending[0].items).toEqual(bumps([5]))
+    expect(logs(c2.effects)).toEqual([`info run run-b: retry at ${at(11)} reached; re-armed 0 (skipped 0 closed, 1 in flight, 0 not marked as processed)`])
+  })
+
+  it('RA12b (A12): a second held run whose time arrives while the first re-armed PR is already a launching run does not re-arm it', () => {
+    const a = held([5], { id: 'run-a', retryAt: RETRY_AT_UTC })
+    const b = held([5], { id: 'run-b', retryAt: at(16) })
+    const c1 = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [a, b] }), obsAt(at(10), { config, github: polled([5]) }))
+    const c2 = tick(c1.state, obsAt(at(15), { config, github: polled([5]) }))
+    expect(c2.state.runs[2].phase.kind).toBe('launching')
+    const c3 = tick(c2.state, obsAt(at(16), { config, github: polled([5]) }))
+    expect(c3.state.runs[1]).not.toHaveProperty('retryAt')
+    expect(c3.state.processed).toEqual(c2.state.processed)
+    expect(c3.state.pending).toEqual([])
+    expect(c3.state.runs).toHaveLength(3)
+    expect(logs(c3.effects)).toEqual([`info run run-b: retry at ${at(16)} reached; re-armed 0 (skipped 0 closed, 1 in flight, 0 not marked as processed)`])
+  })
+
+  it('RA13 (A13 / A14): a rule not watched yet is held until detect has watched it, then the next cycle re-arms through the normal pending path', () => {
+    const start = stateWith({ watchedRules: [IMPL_KEY], processed: marked([5]), runs: [held([5])] })
+    const c1 = tick(start, obsAt(at(10), { config, github: polled([5]) }))
+    expect(c1.state.watchedRules).toContain(DEPS_KEY)
+    expect(c1.state.runs[0].retryAt).toBe(RETRY_AT)
+    expect(c1.state.processed).toEqual(marked([5]))
+    expect(c1.state.pending).toEqual([])
+    const c2 = tick(c1.state, obsAt(at(11), { config, github: polled([5]) }))
+    expect(c2.state.runs[0]).not.toHaveProperty('retryAt')
+    expect(c2.state.processed).toEqual([{ key: depsKey(5), seenAt: at(11) }])
+    expect(c2.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(16) }])
+  })
+
+  it.each([
+    ['done', { kind: 'done', at: at(1), summary: 'held', tabClosed: true }, false],
+    ['failed', { kind: 'failed', at: at(1), reason: 'x', tabClosed: true }, false],
+    ['aborted', { kind: 'aborted', at: at(1), reason: 'x' }, false],
+    ['manual done', { kind: 'done', at: at(1), summary: 'held', tabClosed: true }, true],
+  ] as const)('RN1 (N1): %s run without retryAt never loses a processed key, and nothing is logged', (_name, phase, manual) => {
+    const start = stateWith({ watchedRules: WATCHED, processed: marked([5, 6, 7]), runs: [runWith({ rule: DEPS, kindName: 'Dependabot', items: bumps([5, 6, 7]), phase, manual })] })
+    const { state, effects } = tick(start, obsAt(at(10), { config, github: polled([5, 6]) }))
+    expect(state.processed).toEqual(marked([5, 6, 7]))
+    expect(state.pending).toEqual([])
+    expect(logs(effects)).toEqual([])
+  })
+
+  it('RN2 (N2): runs created by orcapod run and rerun carry no retryAt, even when the rerun source holds one', () => {
+    const source = held([5], { retryAt: HELD_UNTIL })
+    const requests = [
+      { file: 'a.json', request: { type: 'rerun' as const, runId: 'run-a' } },
+      { file: 'b.json', request: { type: 'run' as const, project: 'todos', item: pr(9, BOT), kind: 'dependabot', now: false } },
+    ]
+    const { state } = tick(stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [source] }), obsAt(at(1), { config, requests }))
+    expect(state.runs).toHaveLength(3)
+    expect(state.runs[0].retryAt).toBe(HELD_UNTIL)
+    for (const created of state.runs.slice(1)) expect(created).not.toHaveProperty('retryAt')
+  })
+
+  it('RN5 (N5): a cycle that re-arms is deterministic and does not mutate state or observations', () => {
+    const start = heldState()
+    const obs = obsAt(at(10), { config, github: polled([5]) })
+    const stateBefore = structuredClone(start)
+    const obsBefore = structuredClone(obs)
+    const once = tick(start, obs)
+    const twice = tick(start, obs)
+    expect(twice).toEqual(once)
+    expect(once.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(start).toEqual(stateBefore)
+    expect(obs).toEqual(obsBefore)
+  })
+
+  const runningPhase: Run['phase'] = { kind: 'running', agent: 'working', agentSince: T0, closeAttempts: 0 }
+  const runningHeld = (): State => stateWith({ watchedRules: WATCHED, processed: marked([5]), runs: [held([5], { retryAt: RETRY_AT_UTC, phase: runningPhase })] })
+  const stopRequest: Observations['requests'] = [{ file: 'stop.json', request: { type: 'stop', runId: 'run-a' } }]
+
+  it('RA14 (X1-1): a stop served in the cycle that reaches the retry time aborts the run, drops the retry time with a log, keeps processed, and nothing launches later', () => {
+    const c1 = tick(runningHeld(), obsAt(at(10), { config, github: polled([5]), requests: stopRequest }))
+    expect(onlyRun(c1.state).phase).toMatchObject({ kind: 'aborted', reason: 'orcapod stop' })
+    expect(onlyRun(c1.state)).not.toHaveProperty('retryAt')
+    expect(c1.state.processed).toEqual(marked([5]))
+    expect(c1.state.pending).toEqual([])
+    expect(logs(c1.effects)).toEqual([`info run run-a: stopped; dropped the retry at ${RETRY_AT_UTC}`])
+    const c2 = tick(c1.state, obsAt(at(16), { config, github: polled([5]) }))
+    expect(c2.state.runs).toHaveLength(1)
+    expect(c2.state.processed).toEqual(marked([5]))
+    expect(c2.state.pending).toEqual([])
+    expect(logs(c2.effects)).toEqual([])
+  })
+
+  it('RA15 (X1-1): a run stopped before its retry time drops the retry time at the stop, and reaching that time later re-arms nothing', () => {
+    const c1 = tick(runningHeld(), obsAt(at(5), { config, github: polled([5]), requests: stopRequest }))
+    expect(onlyRun(c1.state).phase).toMatchObject({ kind: 'aborted', reason: 'orcapod stop' })
+    expect(onlyRun(c1.state)).not.toHaveProperty('retryAt')
+    expect(logs(c1.effects)).toEqual([`info run run-a: stopped; dropped the retry at ${RETRY_AT_UTC}`])
+    const c2 = tick(c1.state, obsAt(at(10), { config, github: polled([5]) }))
+    const c3 = tick(c2.state, obsAt(at(16), { config, github: polled([5]) }))
+    for (const { state, effects } of [c2, c3]) {
+      expect(state.runs).toHaveLength(1)
+      expect(state.processed).toEqual(marked([5]))
+      expect(state.pending).toEqual([])
+      expect(logs(effects)).toEqual([])
+    }
+  })
+
+  it('RA16 (X1-1): a run aborted because its pane and tab disappeared keeps the retry time and is re-armed when it is reached', () => {
+    const c1 = tick(runningHeld(), obsAt(at(5), { config, github: polled([5]), orca: seen({ terminals: [] }) }))
+    expect(onlyRun(c1.state).phase).toMatchObject({ kind: 'aborted', reason: 'pane and tab disappeared' })
+    expect(onlyRun(c1.state).retryAt).toBe(RETRY_AT_UTC)
+    expect(c1.state.processed).toEqual(marked([5]))
+    const c2 = tick(c1.state, obsAt(at(10), { config, github: polled([5]) }))
+    expect(onlyRun(c2.state)).not.toHaveProperty('retryAt')
+    expect(c2.state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(c2.state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+    expect(logs(c2.effects)).toEqual([
+      `info run run-a: retry at ${RETRY_AT_UTC} reached; re-armed 1 (skipped 0 closed, 0 in flight, 0 not marked as processed)`,
+      'info detected todos / pr / dependencies: #5 → launches at 2026-10-23T00:15:00.000Z',
+    ])
+  })
+
+  const REVIEW: Rule = { ...DEPS, label: 'review', kind: 'feature', batch: 'each' }
+  const REVIEW_KEY = '["todos","pr","review"]'
+  const reviewConfig = configWith([projectWith({ rules: [IMPL, DEPS, REVIEW] })])
+  const reviewWatched = [...WATCHED, REVIEW_KEY]
+  const offline: Observations['orca'] = { ok: false, error: 'offline' }
+  const rearmedLogs = [
+    `info run run-a: retry at ${RETRY_AT} reached; re-armed 1 (skipped 0 closed, 0 in flight, 0 not marked as processed)`,
+    'info detected todos / pr / dependencies: #5 → launches at 2026-10-23T00:15:00.000Z',
+  ]
+
+  it.each([
+    ['a running run of another rule', false, { rule: REVIEW, kindName: 'Feature' }],
+    ['a running orcapod run run, whose rule has no label', false, { manual: true, rule: { ...DEPS, label: '', batch: 'each' as const, delayMinutes: 0 } }],
+    ['a running rerun of the same rule', true, { manual: true, rule: DEPS }],
+    ['a running run of the same rule', true, { rule: DEPS }],
+  ])('RA17 (X1-2): with %s on the same PR, in flight is %s', (_name, inFlight, overrides) => {
+    const other = runWith({ id: 'run-b', items: bumps([5]), ...overrides })
+    const start = stateWith({ watchedRules: reviewWatched, processed: marked([5]), runs: [held([5]), other] })
+    const { state, effects } = tick(start, obsAt(at(10), { config: reviewConfig, github: polled([5]), orca: offline }))
+    expect(state.runs[0]).not.toHaveProperty('retryAt')
+    if (inFlight) {
+      expect(state.processed).toEqual(marked([5]))
+      expect(state.pending).toEqual([])
+      expect(logs(effects)).toEqual([`info run run-a: retry at ${RETRY_AT} reached; re-armed 0 (skipped 0 closed, 1 in flight, 0 not marked as processed)`])
+    } else {
+      expect(state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+      expect(state.pending).toEqual([{ ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+      expect(logs(effects)).toEqual(rearmedLogs)
+    }
+  })
+
+  it('RA18 (X1-2): the same PR pending under another rule does not count as in flight, and both pendings remain', () => {
+    const reviewPending = { ruleKey: REVIEW_KEY, project: 'todos', items: bumps([5]), fireAt: at(12) }
+    const start = stateWith({ watchedRules: reviewWatched, processed: marked([5]), pending: [reviewPending], runs: [held([5])] })
+    const { state, effects } = tick(start, obsAt(at(10), { config: reviewConfig, github: polled([5]), orca: offline }))
+    expect(state.processed).toEqual([{ key: depsKey(5), seenAt: at(10) }])
+    expect(state.pending).toEqual([reviewPending, { ruleKey: DEPS_KEY, project: 'todos', items: bumps([5]), fireAt: at(15) }])
+    expect(logs(effects)).toEqual(rearmedLogs)
   })
 })

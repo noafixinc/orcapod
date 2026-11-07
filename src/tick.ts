@@ -2,7 +2,7 @@ import { isAllowedAuthor, ruleKey } from './config.ts'
 import { runTitle } from './launch.ts'
 import { WAITING_TOOL_NAMES, findAgent, findTerminal, usablePane } from './orca.ts'
 import { ownValue, setOwnValue } from './records.ts'
-import { newRunId, processedKey } from './state.ts'
+import { isRetryAt, newRunId, processedKey } from './state.ts'
 import type { AgentObservation, Config, Effect, Item, Observations, OrcaRef, Project, Request, ResultFile, Rule, Run, RunPhase, State, TerminalList, TerminalObservation } from './types.ts'
 
 const MINUTE_MS = 60_000
@@ -25,7 +25,7 @@ const EMPTY_LIST: TerminalList = { terminals: [], complete: false }
 export function tick(state: State, obs: Observations): { state: State; effects: Effect[] } {
   const draft = structuredClone(state)
   const effects: Effect[] = []
-  const steps: Step[] = [serve, detect, fire, schedule, recover, track, watchOrca]
+  const steps: Step[] = [serve, rearm, detect, fire, schedule, recover, track, watchOrca]
   for (const step of steps) step(draft, obs, effects)
   return { state: draft, effects }
 }
@@ -130,6 +130,10 @@ function stopRun(run: Run, obs: Observations, effects: Effect[]): void {
   if (handle !== null) effects.push({ type: 'close', runId: run.id, handle })
   if (['queued', 'launching', 'starting', 'running'].includes(run.phase.kind)) {
     setPhase(run, { kind: 'aborted', at: obs.now, reason: 'orcapod stop' }, obs.now)
+    if (run.retryAt !== undefined) {
+      effects.push({ type: 'log', level: 'info', message: `run ${run.id}: stopped; dropped the retry at ${run.retryAt}` })
+      delete run.retryAt
+    }
   } else if (run.phase.kind === 'failed' && handle === null && (run.orca === null || obs.orca.ok)) {
     run.phase.tabClosed = true
   }
@@ -162,6 +166,47 @@ function createRun(draft: State, fields: NewRun, now: string): Run {
   const { seed, ...rest } = fields
   const id = newRunId(now, seed, new Set(draft.runs.map((r) => r.id)))
   return { id, ...rest, createdAt: now, startedAt: null, phase: { kind: 'queued', since: now }, history: [{ kind: 'queued', at: now }], orca: null, notified: [], lastMessage: null }
+}
+
+function rearm(draft: State, obs: Observations, effects: Effect[]): void {
+  for (const run of draft.runs) {
+    if (run.retryAt === undefined || !isFinished(run) || Date.parse(run.retryAt) > Date.parse(obs.now)) continue
+    const polled = ownValue(obs.github, run.project)
+    if (polled === undefined || !polled.ok) continue
+    const admission = admissionOf(obs.config, run)
+    if (admission.kind === 'gone') {
+      effects.push({ type: 'log', level: 'warn', message: `run ${run.id}: rule ${ruleKey(run.project, run.rule)} is not in the config; dropped the retry at ${run.retryAt}` })
+      delete run.retryAt
+      continue
+    }
+    if (admission.kind !== 'manual' && !draft.watchedRules.includes(ruleKey(run.project, run.rule))) continue
+    rearmItems(draft, run, run.retryAt, polled.items, effects)
+    delete run.retryAt
+  }
+}
+
+function rearmItems(draft: State, run: Run, retryAt: string, polledItems: Item[], effects: Effect[]): void {
+  const openIds = new Set(polledItems.map(itemIdentity))
+  const key = ruleKey(run.project, run.rule)
+  const sameRulePending = draft.pending.filter((p) => p.ruleKey === key)
+  const sameRuleUnfinished = draft.runs.filter((r) => !isFinished(r) && ruleKey(r.project, r.rule) === key)
+  const inFlightIds = new Set([...sameRulePending, ...sameRuleUnfinished].flatMap((holder) => holder.items).map(itemIdentity))
+  const isOpen = (item: Item): boolean => openIds.has(itemIdentity(item))
+  const isInFlight = (item: Item): boolean => inFlightIds.has(itemIdentity(item))
+  const closed = run.items.filter((item) => !isOpen(item))
+  const inFlight = run.items.filter((item) => isOpen(item) && isInFlight(item))
+  const candidates = run.items.filter((item) => isOpen(item) && !isInFlight(item))
+  const label = ruleLabel(run.rule)
+  const processedKeys = new Set(draft.processed.map((p) => p.key))
+  const rearmed = candidates.filter((item) => processedKeys.has(processedKey(item, label)))
+  const rearmedKeys = new Set(rearmed.map((item) => processedKey(item, label)))
+  draft.processed = draft.processed.filter((p) => !rearmedKeys.has(p.key))
+  const unprocessed = candidates.length - rearmed.length
+  effects.push({ type: 'log', level: 'info', message: `run ${run.id}: retry at ${retryAt} reached; re-armed ${rearmed.length} (skipped ${closed.length} closed, ${inFlight.length} in flight, ${unprocessed} not marked as processed)` })
+}
+
+function isFinished(run: Run): boolean {
+  return run.phase.kind === 'done' || run.phase.kind === 'failed' || run.phase.kind === 'aborted'
 }
 
 function detect(draft: State, obs: Observations, effects: Effect[]): void {
@@ -207,7 +252,7 @@ function itemIdentity(item: Item): string {
 
 function detectRule(draft: State, project: Project, rule: Rule, items: Item[], processedKeys: Set<string>, now: string, effects: Effect[]): void {
   const key = ruleKey(project.name, rule)
-  const label = rule.label.trim().toLowerCase()
+  const label = ruleLabel(rule)
   const unseen: Item[] = []
   for (const item of items) {
     if (item.target !== rule.target || (label !== '*' && !item.labels.includes(label))) continue
@@ -231,10 +276,15 @@ function detectRule(draft: State, project: Project, rule: Rule, items: Item[], p
   const pending = draft.pending.find((p) => p.ruleKey === key)
   if (pending === undefined) draft.pending.push({ ruleKey: key, project: project.name, items: unseen, fireAt })
   else {
-    pending.items.push(...unseen)
+    const pendingIds = new Set(pending.items.map(itemIdentity))
+    pending.items.push(...unseen.filter((item) => !pendingIds.has(itemIdentity(item))))
     pending.fireAt = fireAt
   }
   effects.push({ type: 'log', level: 'info', message: `detected ${ruleName}: ${numbersOf(unseen)} → launches at ${fireAt}` })
+}
+
+function ruleLabel(rule: Rule): string {
+  return rule.label.trim().toLowerCase()
 }
 
 function fire(draft: State, obs: Observations, effects: Effect[]): void {
@@ -404,7 +454,9 @@ function track(draft: State, obs: Observations, effects: Effect[]): void {
 function trackResult(run: Run, phase: Starting | Running, obs: Observations, effects: Effect[]): DoneResult | 'failed' | null {
   const observed = ownValue(obs.results, run.id)
   if (observed === undefined) return null
-  const file = parseResultFile(observed.raw)
+  const file = parseResultFile(observed.raw, Date.parse(observed.mtime))
+  if (file?.retryAt === undefined) delete run.retryAt
+  else run.retryAt = file.retryAt
   if (file?.status === 'failed') {
     fail(run, `AI reported failed: ${file.summary}`, obs.now, effects)
     return 'failed'
@@ -498,7 +550,7 @@ function trackRunning(run: Run, phase: Running, ref: OrcaRef, sighting: PaneSigh
   }
 }
 
-function parseResultFile(raw: string): ResultFile | null {
+function parseResultFile(raw: string, writtenAt: number): ResultFile | null {
   let json: unknown
   try {
     json = JSON.parse(raw)
@@ -506,13 +558,15 @@ function parseResultFile(raw: string): ResultFile | null {
     return null
   }
   if (typeof json !== 'object' || json === null || Array.isArray(json)) return null
-  const { status, summary, links } = json as Record<string, unknown>
+  const { status, summary, links, retryAt } = json as Record<string, unknown>
   if (status !== 'done' && status !== 'failed') return null
-  return {
+  const file: ResultFile = {
     status,
     summary: typeof summary === 'string' ? summary : '',
     links: Array.isArray(links) ? links.filter((link): link is string => typeof link === 'string') : [],
   }
+  if (retryAt === undefined) return file
+  return isRetryAt(retryAt) && Date.parse(retryAt) > writtenAt ? { ...file, retryAt } : null
 }
 
 function watchOrca(draft: State, obs: Observations, effects: Effect[]): void {

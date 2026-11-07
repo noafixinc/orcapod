@@ -253,6 +253,31 @@ describe('formatStatus', () => {
     ])
     expect(lines).not.toContain('Recent: none')
   })
+
+  it('a done or failed run holding a retry time is annotated with "retry at" in both recent and --history, and an aborted one is not', () => {
+    const retryAt = '2026-11-14T00:00:00+09:00'
+    const state = stateWith({
+      runs: [
+        run({ id: '20261023-0930-8be0d2', rule: dependabotRule, kindName: 'Dependabot', items: dependabotItems, createdAt: '2026-10-23T00:30:00.000Z', retryAt, phase: { kind: 'done', at: '2026-10-23T01:02:00.000Z', summary: 'held 5 PRs', tabClosed: true } }),
+        run({ id: '20261023-0900-c0ffee', items: [item(99)], createdAt: '2026-10-23T00:00:00.000Z', retryAt, phase: { kind: 'failed', at: '2026-10-23T00:50:00.000Z', reason: 'AI reported failed: on hold', tabClosed: true } }),
+        run({ id: '20261023-0901-dead00', items: [item(98)], createdAt: '2026-10-23T00:01:00.000Z', retryAt, phase: { kind: 'aborted', at: '2026-10-23T00:40:00.000Z', reason: 'pane and tab disappeared' } }),
+      ],
+    })
+    const recent = formatStatus({ state, config, daemonPid: 4242, now: NOW, history: false }).split('\n')
+    expect(recent.slice(recent.indexOf('Recent:'))).toEqual([
+      'Recent:',
+      '  8be0d2 "Dependabot ×5" done 10-23 10:02 "held 5 PRs" retry at 2026-11-14T00:00:00+09:00',
+      '  c0ffee "#99 Feature" failed 10-23 09:50 (AI reported failed: on hold) retry at 2026-11-14T00:00:00+09:00',
+      '  dead00 "#98 Feature" aborted 10-23 09:40 (pane and tab disappeared)',
+    ])
+    const history = formatStatus({ state, config, daemonPid: 4242, now: NOW, history: true }).split('\n')
+    expect(history.slice(history.indexOf('History (3):'))).toEqual([
+      'History (3):',
+      '  10-23 09:30 8be0d2 "Dependabot ×5" done 10-23 10:02 "held 5 PRs" retry at 2026-11-14T00:00:00+09:00',
+      '  10-23 09:01 dead00 "#98 Feature" aborted 10-23 09:40 (pane and tab disappeared)',
+      '  10-23 09:00 c0ffee "#99 Feature" failed 10-23 09:50 (AI reported failed: on hold) retry at 2026-11-14T00:00:00+09:00',
+    ])
+  })
 })
 
 describe('resolveRunId', () => {

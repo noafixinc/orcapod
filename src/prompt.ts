@@ -49,6 +49,8 @@ When the work is finished, write the following JSON to ${resultPath} (the direct
 - done: you completed the requested work
 - failed: you could not complete it. Write in summary the reason and the concrete next action a human must take to resolve it. When you stop because the user has to make a decision, also use failed and write in summary what you need them to decide
 
+Optional "retryAt": an ISO 8601 time with a timezone (for example "2026-11-14T00:00:00+09:00"). Write it only when you held an item for a reason that resolves by itself at a known time, such as a release-age wait; orcapod re-detects the run's still-open items once that time has passed and starts a new run. If several items have different times, write the earliest. Omit it otherwise.
+
 Complete the JSON in a single write (do not write partial content and then append to it. When you rewrite it, rewrite the whole file). Once it is written, end the work. You do not need to exit the CLI (orcapod closes the tab). Also, do not wait for further input. For orcapod, the run is treated as still working until this JSON exists (you may end a turn once in the meantime, for example while waiting for CI).
 `
 }
