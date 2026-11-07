@@ -39,7 +39,7 @@ export interface OrcaClient {
 
 export interface Processed { key: string; seenAt: string }
 export interface Pending { ruleKey: string; project: string; items: Item[]; fireAt: string }
-export type ResultFile = { status: 'done' | 'failed'; summary: string; links: string[] }
+export type ResultFile = { status: 'done' | 'failed'; summary: string; links: string[]; retryAt?: string }
 export interface ProjectSnapshot { path: string; repo: string; githubAccount: string }
 export type RunPhase =
   | { kind: 'queued'; since: string }
@@ -49,7 +49,7 @@ export type RunPhase =
   | { kind: 'done'; at: string; summary: string; tabClosed: boolean }
   | { kind: 'failed'; at: string; reason: string; tabClosed: boolean; launchFailed?: true }
   | { kind: 'aborted'; at: string; reason: string }
-export interface Run { paneRecoveredAt?: string; launchUncertain?: boolean; id: string; project: string; target: ProjectSnapshot; rule: Rule; kindName: string; items: Item[]; createdAt: string; startedAt: string | null; phase: RunPhase; history: { kind: RunPhase['kind']; at: string }[]; orca: OrcaRef | null; notified: string[]; bypassLimit: boolean; manual: boolean; lastMessage: string | null }
+export interface Run { paneRecoveredAt?: string; launchUncertain?: boolean; retryAt?: string; id: string; project: string; target: ProjectSnapshot; rule: Rule; kindName: string; items: Item[]; createdAt: string; startedAt: string | null; phase: RunPhase; history: { kind: RunPhase['kind']; at: string }[]; orca: OrcaRef | null; notified: string[]; bypassLimit: boolean; manual: boolean; lastMessage: string | null }
 export interface ConfigStatus { loadedAt: string; sha256: string; error: string | null }
 export interface DaemonInfo { pid: number; startedAt: string; lastCycleAt: string; lastCycleError: { at: string; message: string } | null; orcaVersion: string | null; cycleSeconds: number }
 export interface State { version: 1; processed: Processed[]; pending: Pending[]; runs: Run[]; watchedRules: string[]; lastPolledAt: Record<string, string>; projectErrors: Record<string, { since: string; message: string }>; orcaOutageSince: string | null; consumedRequests: string[]; configStatus: ConfigStatus | null; daemonInfo: DaemonInfo | null }

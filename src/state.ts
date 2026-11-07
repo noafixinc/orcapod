@@ -92,6 +92,7 @@ const runShapeError: ShapeCheck = (value) => {
   if (error !== null) return error
   if (value.paneRecoveredAt !== undefined && typeof value.paneRecoveredAt !== 'string') return 'paneRecoveredAt is not a string'
   if (value.launchUncertain !== undefined && typeof value.launchUncertain !== 'boolean') return 'launchUncertain is not a boolean'
+  if (value.retryAt !== undefined && !isRetryAt(value.retryAt)) return 'retryAt is not an ISO 8601 time with a timezone'
   const { kind, tabClosed, launchFailed } = value.phase as Record<string, unknown>
   if (!PHASE_KINDS.some((k) => k === kind)) return `phase.kind is not one of ${PHASE_KINDS.join(' / ')}: ${JSON.stringify(kind)}`
   if (kind !== 'failed') return null
@@ -404,6 +405,12 @@ export function releaseDaemonLock(home: string, pid: number): void {
 
 export function processedKey(item: Item, label: string): string {
   return JSON.stringify([item.project, item.target, item.number, label])
+}
+
+const RETRY_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/
+
+export function isRetryAt(value: unknown): value is string {
+  return isString(value) && RETRY_AT_PATTERN.test(value) && !Number.isNaN(Date.parse(value))
 }
 
 const SHA1_HEX_LENGTH = 40
