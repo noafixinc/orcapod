@@ -124,6 +124,11 @@ describe('loadState', () => {
   it.each([
     ['paneRecoveredAt', { paneRecoveredAt: 123 }],
     ['launchUncertain', { launchUncertain: 'true' }],
+    ['retryAt', { retryAt: 1794582000000 }],
+    ['retryAt', { retryAt: '2026-11-14T00:00:00' }],
+    ['retryAt', { retryAt: '2026-13-14T00:00:00Z' }],
+    ['retryAt', { retryAt: 'tomorrow' }],
+    ['retryAt', { retryAt: null }],
   ])('G4: loadState and snapshot reject an invalid %s and keep the original JSON', (field, overrides) => {
     const original = JSON.stringify({ ...savedState, runs: [{ ...run, ...overrides }] })
     writeStateFile(original)
@@ -221,7 +226,7 @@ describe('loadState', () => {
   })
 
   it('loads as-is a state.json whose configStatus and daemonInfo have values and whose failed phase has tabClosed, with and without launchFailed', () => {
-    const failed: Run = { ...run, phase: { kind: 'failed', at: '2026-10-23T00:20:00.000Z', reason: 'x', tabClosed: true } }
+    const failed: Run = { ...run, retryAt: '2026-10-23T09:00:00+09:00', phase: { kind: 'failed', at: '2026-10-23T00:20:00.000Z', reason: 'x', tabClosed: true } }
     const launchFailed: Run = { ...run, id: '20261023-0017-bbbbbb', phase: { kind: 'failed', at: '2026-10-23T00:20:00.000Z', reason: 'launch failed: x', tabClosed: false, launchFailed: true } }
     const full: State = {
       ...savedState,

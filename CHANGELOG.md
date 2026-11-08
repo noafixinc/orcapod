@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Optional `retryAt` (ISO 8601 with a timezone) in `result.json`. When it is reached, a new `rearm` tick step makes the still-open items of that run eligible for detection again, which starts a new run. `orcapod status` shows `retry at <retryAt>` on done and failed runs. An invalid `retryAt` makes the result invalid.
+- The Dependabot example prompt asks the AI to write `retryAt` when it holds a pull request for the release-age wait.
+
+### Fixed
+
+- The same pull request is no longer added to a rule's pending list twice.
+
 ### Changed
 
 - Monitor lists omit completion and failure summaries; the full result remains available in the run detail view.

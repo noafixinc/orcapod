@@ -35,7 +35,7 @@ export function formatStatus(view: StatusView): string {
     ...section('Running', state.runs.filter(isActive).map((run) => activeLine(run, now))),
     ...(view.history
       ? section(`History (${state.runs.length})`, [...state.runs].sort(byNewest((run) => run.createdAt)).map(historyLine))
-      : section('Recent', finishedRuns(state.runs).slice(0, RECENT_LIMIT).map(({ run, phase }) => `${runLabel(run)} ${finishedText(phase)}`))),
+      : section('Recent', finishedRuns(state.runs).slice(0, RECENT_LIMIT).map(({ run, phase }) => `${runLabel(run)} ${finishedText(phase)}${retryNote(run)}`))),
   ].join('\n'))
 }
 
@@ -96,7 +96,12 @@ function activeLine(run: Run, now: string): string {
 }
 
 function historyLine(run: Run): string {
-  return `${clock(run.createdAt)} ${runLabel(run)} ${phaseText(run.phase)}`
+  return `${clock(run.createdAt)} ${runLabel(run)} ${phaseText(run.phase)}${retryNote(run)}`
+}
+
+function retryNote(run: Run): string {
+  if (run.retryAt === undefined || (run.phase.kind !== 'done' && run.phase.kind !== 'failed')) return ''
+  return ` retry at ${run.retryAt}`
 }
 
 function finishedRuns(runs: Run[]): { run: Run; phase: FinishedPhase }[] {

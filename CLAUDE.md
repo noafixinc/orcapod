@@ -47,7 +47,7 @@ The only contact with the outside world is `CycleDeps` (`home, orca, github, ghA
 
 ### State transitions are a pure function (`tick.ts`)
 
-`tick(state, obs)` passes a `structuredClone` of the state through `serve → detect → fire → schedule → recover → track → watchOrca` and returns `{ state, effects }`. It does no I/O. Only `applyLaunch` / `applyClose` feed effect results back into the state. To add behaviour, add a step and an `Effect` variant; `daemon.ts` only executes I/O.
+`tick(state, obs)` passes a `structuredClone` of the state through `serve → rearm → detect → fire → schedule → recover → track → watchOrca` and returns `{ state, effects }`. It does no I/O. Only `applyLaunch` / `applyClose` feed effect results back into the state. To add behaviour, add a step and an `Effect` variant; `daemon.ts` only executes I/O.
 
 ### Single writer
 
@@ -62,7 +62,7 @@ Only the daemon writes `state/state.json` (one process via `state/daemon.lock`, 
 ### From detection to launch
 
 - Author filter: `isAllowedAuthor`. Humans need an `author_association` in `project.authors` (default OWNER / MEMBER / COLLABORATOR); bots need a login in `project.bots` (default `dependabot[bot]`). A rule's own `authors` narrows it further
-- Processed items are tracked locally per `(item, label)` (`state.processed`); nothing is attached on GitHub. `label: "*"` matches any label
+- Processed items are tracked locally per `(item, label)` (`state.processed`); nothing is attached on GitHub. `label: "*"` matches any label. Re-adding a label does not reprocess an item; `orcapod rerun` and `retryAt` do. When a finished run's `retryAt` is reached, `rearm` removes its still-open items from `state.processed` (on a cycle with a successful GitHub poll) so `detect` picks them up again. Items already in the same rule's pending or unfinished runs are skipped (another rule's run, or an `orcapod run` run, does not count), and `orcapod stop` that aborts a run cancels its `retryAt`
 - When a rule is watched for the first time (not in `watchedRules`), `bootstrap: skip` marks the current matches as processed without launching
 - Detections accumulate in the rule's `pending`; `fireAt = last detection + delayMinutes` is extended on every detection. On expiry, `batch: together` is one run and `each` is one run per item
 - Runs beyond `maxConcurrentPerProject` are `queued`. Only a manual `--now` run ignores the limit
@@ -73,7 +73,7 @@ The `RunPhase` union is the state machine: `queued → launching → starting �
 
 - The command given to Orca is always `bash '<runs/<id>/launch.sh>'` (enforced by `test/launch.test.ts` C30). `launch.sh` first writes its own pane to `pane.json` and exits without starting the AI when it cannot obtain `GH_TOKEN`
 - Save the state in `launching` before calling `terminal create`. If the result of create is unknown, mark `launchUncertain` and wait for `pane.json`; if it does not appear within 5 minutes (`LAUNCH_RECOVERY_MS`), mark failed and do not relaunch (avoids double execution)
-- Completion is decided only from `result.json` (`{"status":"done"|"failed","summary":"…","links":[…]}`); Orca's agent state `done` is not a completion signal. `terminal close` is issued only when a `done` result exists and an agent `done` that started after the mtime of `result.json` has been observed
+- Completion is decided only from `result.json` (`{"status":"done"|"failed","summary":"…","links":[…]}` plus an optional `retryAt`, a timezone-qualified ISO 8601 time; a malformed one, or one not after the mtime of `result.json`, makes the result invalid); Orca's agent state `done` is not a completion signal. `terminal close` is issued only when a `done` result exists and an agent `done` that started after the mtime of `result.json` has been observed
 - Only `ptyKilled: true` counts as a successful close; after `MAX_CLOSE_ATTEMPTS` (3) failures the tab is left open and the run becomes done
 - `status: failed`, and broken JSON that is not repaired within 60 seconds (`INVALID_RESULT_GRACE_MS`), are failed. Failed tabs are not closed. A failed run stays in the monitor's Attention while its tab is open and moves to Recent once the tab is closed
 - `starting` for 90 seconds notifies once about the launch wait (with the tail of the screen). If both the pane and the tab disappear from a complete listing, the run is aborted. An incomplete `terminal list` is never treated as disappearance
