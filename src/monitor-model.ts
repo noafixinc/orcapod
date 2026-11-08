@@ -1,7 +1,7 @@
 import { ruleKey } from './config.ts'
 import { runTitle } from './launch.ts'
 import { ownValue } from './records.ts'
-import { ago, byNewest, clock, duration, fireTimingText, isActive, isFinished, pendingNotes, phaseText, shortRunId } from './status.ts'
+import { ago, byNewest, clock, duration, fireTimingText, isActive, isFinished, pendingNotes, phaseText, retryAtOf, shortRunId } from './status.ts'
 import type { Config, ConfigResult, ConfigStatus, Pending, Project, Rule, Run, State } from './types.ts'
 
 const FALLBACK_CYCLE_SECONDS = 20
@@ -201,7 +201,8 @@ function runRow(run: Run, now: string, note: string | null): Row {
   const since = sinceOf(run)
   const phase = run.phase
   const phaseLabel = phase.kind === 'done' || phase.kind === 'failed' ? `${phase.kind} ${clock(phase.at)}${phase.tabClosed ? '' : ' (tab remains)'}` : phaseText(phase)
-  const notes = [note, run.manual ? 'manual' : null, run.bypassLimit ? '--now' : null].filter((text) => text !== null)
+  const retryAt = retryAtOf(run)
+  const notes = [note, retryAt === null ? null : `retry at ${clock(retryAt)}`, run.manual ? 'manual' : null, run.bypassLimit ? '--now' : null].filter((text) => text !== null)
   const cells: Cell[] = [
     { column: 'id', text: shortRunId(run.id) },
     { column: 'project', text: run.project },
