@@ -179,6 +179,15 @@ describe('renderScreen: width and height', () => {
     expect(row).toBe(`│   aaaaaa  todos      #123 Feature               running/working 24m last: 👨‍👩‍👧 é \uff76\uff85 \u6f22\u5b57 [31m${' '.repeat(32)}│`)
   })
 
+  it('R12-3: at 126 columns an attention failure shows its complete retry time and stop hint', () => {
+    const model = modelOf(stateWith({ runs: [runWith({
+      retryAt: '2026-11-14T00:00:00+09:00',
+      phase: { kind: 'failed', at: secondsBefore(300), reason: 'on hold', tabClosed: false },
+    })] }), 1)
+    const row = texts(renderScreen(model, initialUi(model), LARGE, [], null)).find((line) => line.includes('3f9a1c'))
+    expect(row).toBe('│ ! 3f9a1c  todos      #123 Feature               failed 10-23 09:55 (tab remains) retry at 11-14 00:00 → orcapod stop 3f9a1c│')
+  })
+
   it('A25: exactly 80×24 gives all 24 rows at width 80', () => {
     const model = modelOf(shapedState({ attention: 1, active: 1, waiting: 1, recent: 1 }))
     expectFullScreen(renderScreen(model, initialUi(model), SMALL, LOG, null), SMALL)

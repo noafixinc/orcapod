@@ -475,6 +475,31 @@ describe('buildMonitorModel: section exclusivity and ordering', () => {
     ])
   })
 
+  it.each<{ name: string; phase: Run['phase']; retryAt?: string; section: SectionId; note: string | undefined }>([
+    { name: 'done with retryAt', phase: { kind: 'done', at: NOW, summary: 'on hold', tabClosed: true }, retryAt: '2026-11-14T00:00:00+09:00', section: 'recent', note: 'retry at 11-14 00:00' },
+    { name: 'failed with a closed tab and retryAt', phase: { kind: 'failed', at: NOW, reason: 'on hold', tabClosed: true }, retryAt: '2026-11-14T00:00:00+09:00', section: 'recent', note: 'retry at 11-14 00:00' },
+    { name: 'failed with an open tab and retryAt', phase: { kind: 'failed', at: NOW, reason: 'on hold', tabClosed: false }, retryAt: '2026-11-14T00:00:00+09:00', section: 'attention', note: 'retry at 11-14 00:00' },
+    { name: 'aborted with retryAt', phase: { kind: 'aborted', at: NOW, reason: 'orcapod stop' }, retryAt: '2026-11-14T00:00:00+09:00', section: 'recent', note: undefined },
+    { name: 'done without retryAt', phase: { kind: 'done', at: NOW, summary: 'completed', tabClosed: true }, section: 'recent', note: undefined },
+    { name: 'failed with a closed tab without retryAt', phase: { kind: 'failed', at: NOW, reason: 'type error', tabClosed: true }, section: 'recent', note: undefined },
+    { name: 'failed with an open tab without retryAt', phase: { kind: 'failed', at: NOW, reason: 'type error', tabClosed: false }, section: 'attention', note: undefined },
+  ])('R12-1: $name has the expected retry note in its section and history', ({ phase, retryAt, section, note }) => {
+    const run = runWith({ phase, ...(retryAt === undefined ? {} : { retryAt }) })
+    const model = modelOf(stateWith({ runs: [run] }))
+    expect(sectionsHolding(model, run.id)).toEqual([section])
+    expect(rowsOf(model, section).map((row) => cellsOf(row).note)).toEqual([note])
+    expect(model.history.map((row) => cellsOf(row).note)).toEqual([note])
+  })
+
+  it('R12-2: the retry time precedes manual and --now notes in recent and history', () => {
+    const model = modelOf(stateWith({ runs: [runWith({
+      retryAt: '2026-11-13T15:00:00Z', manual: true, bypassLimit: true,
+      phase: { kind: 'done', at: NOW, summary: 'on hold', tabClosed: true },
+    })] }))
+    expect(cellsOf(rowsOf(model, 'recent')[0]).note).toBe('retry at 11-14 00:00 / manual / --now')
+    expect(cellsOf(model.history[0]).note).toBe('retry at 11-14 00:00 / manual / --now')
+  })
+
   it('recent and history omit completion and failure summaries while keeping times and open-tab notes', () => {
     const model = modelOf(stateWith({
       runs: [

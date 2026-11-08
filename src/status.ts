@@ -100,8 +100,12 @@ function historyLine(run: Run): string {
 }
 
 function retryNote(run: Run): string {
-  if (run.retryAt === undefined || (run.phase.kind !== 'done' && run.phase.kind !== 'failed')) return ''
-  return ` retry at ${run.retryAt}`
+  const retryAt = retryAtOf(run)
+  return retryAt === null ? '' : ` retry at ${retryAt}`
+}
+
+export function retryAtOf(run: Run): string | null {
+  return run.phase.kind === 'done' || run.phase.kind === 'failed' ? run.retryAt ?? null : null
 }
 
 function finishedRuns(runs: Run[]): { run: Run; phase: FinishedPhase }[] {
